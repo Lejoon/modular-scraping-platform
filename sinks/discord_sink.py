@@ -35,11 +35,16 @@ class DiscordSink(Sink):
         # Get tracked companies from config
         tracked_companies = kwargs.get("tracked_companies", [])
         self.tracked_companies = set(tracked_companies) if tracked_companies else set()
+        # Track if missing config warning has been issued
+        self._warned_missing = False
 
     async def handle(self, item: ParsedItem) -> None:
         """Handle a parsed item by sending Discord notification."""
         if not self.bot or not self.channel_id:
-            logger.warning("Discord bot or channel not configured, skipping notification")
+            # Warn only once if bot or channel not configured
+            if not self._warned_missing:
+                logger.warning("Discord bot or channel not configured, skipping notification")
+                self._warned_missing = True
             return
         
         try:

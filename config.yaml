@@ -2,14 +2,20 @@ fetcher_defaults:
   max_retries: 5
   timeout: 30
 
+# defaults for all sinks, but each service can still override
 sink_defaults:
-  db_url: sqlite+aiosqlite:///scraper.db
+  # nothing here, or common defaults like logging flags
 
 services:
   - name: fi_shortinterest
     fetcher: FiFetcher
     parsers: [FiAggParser, FiActParser, DiffParser]
-    sinks: [DatabaseSink, DiscordSink]
+    sinks:
+      - type: DatabaseSink
+        config:
+          db_url: sqlite+aiosqlite:///fi_shortinterest.db
+      - type: DiscordSink
+        config: {}
     schedule: "0,30 * * * *"  # every half hour
     
 # Environment and configuration

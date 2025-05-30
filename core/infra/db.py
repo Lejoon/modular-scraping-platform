@@ -18,7 +18,16 @@ class Database:
     """Async SQLite database wrapper."""
     
     def __init__(self, db_path: str = "scraper.db"):
-        self.db_path = Path(db_path)
+        # Handle SQLite URL format if provided
+        if db_path.startswith("sqlite"):
+            # Handle sqlite+aiosqlite:///path format
+            if "///" in db_path:
+                actual_path = db_path.split("///")[-1]
+            else:
+                actual_path = db_path.split("//")[-1]
+            self.db_path = Path(actual_path)
+        else:
+            self.db_path = Path(db_path)
         self._connection: Optional[aiosqlite.Connection] = None
 
     async def connect(self) -> None:

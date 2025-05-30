@@ -89,11 +89,24 @@ class Orchestrator:
             # Create sinks
             sinks = []
             sink_defaults = self.cfg.get("sink_defaults", {})
-            for sink_name in svc_cfg["sinks"]:
+            for sink_def in svc_cfg["sinks"]:
+                # Support both old format (string) and new format (dict with type/config)
+                if isinstance(sink_def, str):
+                    # Old format: just the sink name
+                    sink_name = sink_def
+                    sink_config = {}
+                else:
+                    # New format: {"type": "SinkName", "config": {...}}
+                    sink_name = sink_def["type"]
+                    sink_config = sink_def.get("config", {})
+                
                 if sink_name not in self.sinks:
                     logger.error(f"Unknown sink: {sink_name}")
                     continue
-                sink = self.sinks[sink_name](**sink_defaults)
+                
+                # Merge global sink_defaults with this service's overrides
+                merged_config = {**sink_defaults, **sink_config}
+                sink = self.sinks[sink_name](**merged_config)
                 sinks.append(sink)
             
             logger.info(f"Running service: {service_name}")

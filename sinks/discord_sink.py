@@ -24,20 +24,17 @@ class DiscordSink(Sink):
     
     name = "DiscordSink"
     
-    def __init__(
-        self,
-        bot: Optional[object] = None,
-        channel_id: Optional[int] = None,
-        error_channel_id: Optional[int] = None,
-        tracked_companies: Optional[Set[str]] = None,
-    ):
+    def __init__(self, **kwargs):
         if discord is None:
             raise ImportError("discord.py package is required for Discord notifications")
         
-        self.bot = bot
-        self.channel_id = channel_id
-        self.error_channel_id = error_channel_id
-        self.tracked_companies = tracked_companies or set()
+        self.bot = kwargs.get("bot")
+        self.channel_id = kwargs.get("channel_id")
+        self.error_channel_id = kwargs.get("error_channel_id")
+        
+        # Get tracked companies from config
+        tracked_companies = kwargs.get("tracked_companies", [])
+        self.tracked_companies = set(tracked_companies) if tracked_companies else set()
 
     async def handle(self, item: ParsedItem) -> None:
         """Handle a parsed item by sending Discord notification."""

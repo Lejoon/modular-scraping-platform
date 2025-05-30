@@ -2,7 +2,6 @@
 FI Short Interest Fetcher - Downloads ODS files from Finansinspektionen.
 """
 
-import asyncio
 import logging
 from datetime import datetime
 from typing import AsyncIterator, Optional
@@ -26,50 +25,45 @@ class FiFetcher(Fetcher):
     URL_TS = "https://www.fi.se/sv/vara-register/blankningsregistret/"
     URL_AGG = "https://www.fi.se/sv/vara-register/blankningsregistret/GetBlankningsregisterAggregat/"
     URL_ACT = "https://www.fi.se/sv/vara-register/blankningsregistret/GetAktuellFile/"
-    SLEEP = 15 * 60  # 15 minutes
 
-    def __init__(self, session: Optional[aiohttp.ClientSession] = None):
-        self._http_client = HttpClient(session=session)
+    def __init__(self, **kwargs):
+        self.http = HttpClient(**kwargs)
         self._last_seen: Optional[str] = None
 
     async def fetch(self) -> AsyncIterator[RawItem]:
-        """Fetch FI short interest data."""
+        """Fetch FI short interest data - single poll, no infinite loop."""
         try:
-            while True:
-                ts = await self._poll_timestamp()
-                if ts and ts != "0001-01-01 00:00" and ts != self._last_seen:
-                    logger.info(f"New timestamp detected: {ts}")
-                    
-                    # Download both files
-                    agg_bytes = await self._http_client.get_bytes(self.URL_AGG)
-                    act_bytes = await self._http_client.get_bytes(self.URL_ACT)
-
-                    fetched_at = datetime.utcnow()
-                    self._last_seen = ts
-
-                    yield RawItem(source="fi.short.agg", payload=agg_bytes, fetched_at=fetched_at)
-                    yield RawItem(source="fi.short.act", payload=act_bytes, fetched_at=fetched_at)
-                
-                await asyncio.sleep(self.SLEEP)
-        finally:
-            await self._http_client.close()
-
-    async def _poll_timestamp(self) -> Optional[str]:
-        """Poll the FI website for the last update timestamp."""
-        try:
-            html = await self._http_client.get_text(self.URL_TS)
+            # 1) Poll timestamp
+            html = await self.http.get_text(self.URL_TS)
             soup = BeautifulSoup(html, "html.parser")
+            tag = soup.find("p", string=lambda t: t and "Listan uppdaterades:" in t)
+            ts = tag.text.split(": ", 1)[1].strip() if tag else None
             
-            # Look for the timestamp text
-            tag = soup.find("p", string=lambda t: "Listan uppdaterades:" in t if t else False)
-            if not tag:
-                logger.warning("Could not find timestamp on FI website")
-                return None
-            
-            timestamp = tag.text.split(": ")[1].strip()
-            logger.debug(f"Found timestamp: {timestamp}")
-            return timestamp
-            
+            logger.debug(f"Found timestamp: {ts}")
+
+            # 2) If new timestamp, download both files
+            if ts and ts != "0001-01-01 00:00" and ts != self._last_seen:
+                logger.info(f"New timestamp detected: {ts} (previous: {self._last_seen})")
+                
+                now = datetime.utcnow()
+                
+                # Download aggregate file
+                agg_bytes = await self.http.get_bytes(self.URL_AGG)
+                logger.info(f"Downloaded aggregate file: {len(agg_bytes)} bytes")
+                
+                # Download current positions file
+                act_bytes = await self.http.get_bytes(self.URL_ACT)
+                logger.info(f"Downloaded positions file: {len(act_bytes)} bytes")
+                
+                self._last_seen = ts
+
+                yield RawItem(source="fi.short.agg", payload=agg_bytes, fetched_at=now)
+                yield RawItem(source="fi.short.act", payload=act_bytes, fetched_at=now)
+            else:
+                logger.debug(f"No new data (timestamp: {ts})")
+
         except Exception as e:
-            logger.error(f"Failed to poll timestamp: {e}")
-            return None
+            logger.error(f"Failed to fetch FI data: {e}")
+            # Don't re-raise to allow scheduler to continue
+        finally:
+            await self.http.close()

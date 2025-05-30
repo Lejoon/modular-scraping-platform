@@ -1,0 +1,12 @@
+[scraper_platform.fetchers]
+FiFetcher = plugins.fi_shortinterest.fetcher:FiFetcher
+
+[scraper_platform.parsers]
+DiffParser = plugins.fi_shortinterest.diff_parser:DiffParser
+FiActParser = plugins.fi_shortinterest.parser:FiActParser
+FiAggParser = plugins.fi_shortinterest.parser:FiAggParser
+
+[scraper_platform.sinks]
+DatabaseSink = sinks.database_sink:DatabaseSink
+DiscordSink = sinks.discord_sink:DiscordSink
+TelegramSink = sinks.telegram_sink:TelegramSink

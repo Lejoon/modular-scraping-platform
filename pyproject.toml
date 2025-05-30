@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "modular-scraping-platform"
+version = "1.0.0"
+description = "A modular platform for web scraping with pluggable fetchers, parsers, and sinks"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+dependencies = [
+    "pydantic>=2.0.0",
+    "aiohttp>=3.8.0",
+    "aiosqlite>=0.19.0",
+    "apscheduler>=3.10.0",
+    "pyyaml>=6.0",
+    "beautifulsoup4>=4.12.0",
+    "lxml>=4.9.0",
+    "pandas>=2.0.0",
+    "openpyxl>=3.1.0",
+    "odfpy>=1.4.0",
+]
+
+[project.optional-dependencies]
+discord = ["discord.py>=2.3.0"]
+telegram = ["python-telegram-bot>=20.0"]
+browser = ["playwright>=1.40.0"]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "mypy>=1.5.0",
+]
+
+[project.entry-points."scraper_platform.fetchers"]
+FiFetcher = "plugins.fi_shortinterest.fetcher:FiFetcher"
+
+[project.entry-points."scraper_platform.parsers"]
+FiAggParser = "plugins.fi_shortinterest.parser:FiAggParser"
+FiActParser = "plugins.fi_shortinterest.parser:FiActParser"
+DiffParser = "plugins.fi_shortinterest.diff_parser:DiffParser"
+
+[project.entry-points."scraper_platform.sinks"]
+DatabaseSink = "sinks.database_sink:DatabaseSink"
+DiscordSink = "sinks.discord_sink:DiscordSink"
+TelegramSink = "sinks.telegram_sink:TelegramSink"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["core*", "plugins*", "sinks*"]
+
+[tool.black]
+line-length = 88
+target-version = ['py310']
+
+[tool.isort]
+profile = "black"
+line_length = 88

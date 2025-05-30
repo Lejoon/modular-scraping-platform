@@ -69,7 +69,14 @@ class DatabaseSink(Sink):
         },
     }
 
-    def __init__(self, db_path: str = "scraper.db"):
+    def __init__(self, **kwargs):
+        db_url = kwargs.get("db_url", "scraper.db")
+        # Extract path from SQLite URL format if needed
+        if db_url.startswith("sqlite"):
+            # Handle sqlite+aiosqlite:///path format
+            db_path = db_url.split("///")[-1] if "///" in db_url else db_url.split("//")[-1]
+        else:
+            db_path = db_url
         self.db = Database(db_path)
 
     async def handle(self, item: ParsedItem) -> None:

@@ -160,6 +160,8 @@ class Orchestrator:
                     name=svc["name"],
                 )
                 logger.info(f"Scheduled service '{svc['name']}' with schedule '{svc['schedule']}'")
+                # Kick off service immediately on startup
+                asyncio.create_task(self._wire_service(svc))
             except Exception as e:
                 logger.error(f"Failed to schedule service {svc['name']}: {e}")
 

@@ -16,7 +16,7 @@ services:
           db_url: sqlite+aiosqlite:///fi_shortinterest.db
       - type: DiscordSink
         config: {}
-    schedule: "0,30 * * * *"  # every half hour
+    schedule: "0,30 * * * *"
     
 # Environment and configuration
 discord:

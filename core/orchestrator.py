@@ -74,7 +74,7 @@ class Orchestrator:
                 logger.error(f"Unknown fetcher: {fetcher_name}")
                 return
             
-            fetcher_defaults = self.cfg.get("fetcher_defaults", {})
+            fetcher_defaults = self.cfg.get("fetcher_defaults") or {}
             fetcher = self.fetchers[fetcher_name](**fetcher_defaults)
             
             # Create parsers
@@ -88,7 +88,7 @@ class Orchestrator:
             
             # Create sinks
             sinks = []
-            sink_defaults = self.cfg.get("sink_defaults", {})
+            sink_defaults = self.cfg.get("sink_defaults") or {}
             for sink_def in svc_cfg["sinks"]:
                 # Support both old format (string) and new format (dict with type/config)
                 if isinstance(sink_def, str):
@@ -113,27 +113,30 @@ class Orchestrator:
             
             # Execute the pipeline: fetch -> parse -> sink
             async for raw_item in fetcher.fetch():
+                # Sequential pipeline: start with raw_item, pass results through parsers in order
+                current_items = [raw_item]
+                
+                # Apply parsers in the order specified in config
                 for parser in parsers:
-                    try:
-                        parsed_items = await parser.parse(raw_item)
-                        for parsed_item in parsed_items:
-                            # Handle diff parsing if available
-                            items_to_sink = [parsed_item]
-                            if hasattr(parser, 'diff'):
-                                diff_items = await parser.diff(parsed_item)
-                                if diff_items:  # Only use diff if it returns items
-                                    items_to_sink = diff_items
-                            
-                            # Send to all sinks
-                            for item in items_to_sink:
-                                for sink in sinks:
-                                    try:
-                                        await sink.handle(item)
-                                    except Exception as e:
-                                        logger.error(f"Sink {sink.name} failed: {e}")
-                    except Exception as e:
-                        logger.error(f"Parser {parser.name} failed: {e}")
-                        logger.debug(traceback.format_exc())
+                    next_items = []
+                    for item in current_items:
+                        try:
+                            parsed_items = await parser.parse(item)
+                            next_items.extend(parsed_items)
+                        except Exception as e:
+                            logger.error(f"Parser {parser.name} failed: {e}")
+                            logger.debug(traceback.format_exc())
+                    
+                    # Update current_items for next parser in the sequence
+                    current_items = next_items
+                
+                # Send final parsed items to sinks
+                for item in current_items:
+                    for sink in sinks:
+                        try:
+                            await sink.handle(item)
+                        except Exception as e:
+                            logger.error(f"Sink {sink.name} failed: {e}")
                         
         except Exception as e:
             logger.error(f"Service {service_name} failed: {e}")
@@ -150,14 +153,13 @@ class Orchestrator:
         # Schedule each service
         for svc in self.cfg["services"]:
             try:
-                # Create a lambda that captures the service config
-                job_func = lambda svc=svc: asyncio.create_task(self._wire_service(svc))
-                
+                # Schedule the asynchronous service directly; APScheduler will handle coroutine execution
                 self.scheduler.add_cron_job(
-                    func=job_func,
+                    func=self._wire_service,
                     cron_expression=svc["schedule"],
                     job_id=svc["name"],
                     name=svc["name"],
+                    args=[svc]
                 )
                 logger.info(f"Scheduled service '{svc['name']}' with schedule '{svc['schedule']}'")
                 # Kick off service immediately on startup

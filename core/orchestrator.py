@@ -88,7 +88,7 @@ class Orchestrator:
             
             # Create sinks
             sinks = []
-            sink_defaults = self.cfg.get("sink_defaults") or {}
+            sink_defaults = self.cfg.get("sink_defaults", {})
             for sink_def in svc_cfg["sinks"]:
                 # Support both old format (string) and new format (dict with type/config)
                 if isinstance(sink_def, str):

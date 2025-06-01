@@ -2,9 +2,9 @@
 FiFetcher = plugins.fi_shortinterest.fetcher:FiFetcher
 
 [scraper_platform.parsers]
+DiffParser = plugins.fi_shortinterest.diff_parser:DiffParser
 FiActParser = plugins.fi_shortinterest.parser:FiActParser
 FiAggParser = plugins.fi_shortinterest.parser:FiAggParser
-FiDiffParser = plugins.fi_shortinterest.diff_parser:FiDiffParser
 
 [scraper_platform.sinks]
 DatabaseSink = sinks.database_sink:DatabaseSink

@@ -1,63 +1,79 @@
 # Modular Scraper Platform
 
-This is a complete rewrite of the financial data scraping system using a modular Fetcher→Parser→Sink architecture.
+A plugin-centric framework for building data processing pipelines with automatic plugin discovery and YAML-based configuration. Features a Transform-based architecture where plugins can be chained together without manual registration.
 
 ## Architecture
 
 ```
-new_implementation/
+modular-scraping-platform/
 │
-├── core/                     # Re-usable framework – very stable
-│   ├── models.py             # RawItem, ParsedItem, Event
-│   ├── interfaces.py         # Fetcher, Parser, Sink abstract classes
-│   ├── infra/
-│   │   ├── http.py           # aiohttp wrapper with retry logic
-│   │   ├── ws.py             # websocket client with heartbeat / reconnect
-│   │   ├── sel.py            # Playwright helpers for browser automation
-│   │   ├── db.py             # async SQLite wrapper with migrations
-│   │   └── scheduler.py      # APScheduler wrapper
-│   └── orchestrator.py       # pipeline management and orchestration
+├── core/                           # Core framework
+│   ├── interfaces.py              # Transform abstract base class
+│   ├── models.py                  # RawItem, ParsedItem, Event
+│   ├── plugin_loader.py           # Automatic plugin discovery
+│   ├── pipeline_orchestrator.py   # Pipeline execution engine
+│   └── infra/                     # Infrastructure components
+│       ├── http.py               # aiohttp wrapper with retry logic
+│       ├── ws.py                 # websocket client with heartbeat / reconnect
+│       ├── sel.py                # Playwright helpers for browser automation
+│       ├── db.py                 # async SQLite wrapper with migrations
+│       └── scheduler.py          # APScheduler wrapper
 │
-├── plugins/                  # Domain-specific implementations
+├── plugins/                        # Auto-discovered plugins
 │   └── fi_shortinterest/
-│       ├── fetcher.py        # FiFetcher (ODS download + timestamp poll)
-│       ├── parser.py         # FiAggParser / FiActParser
-│       └── sinkmap.yaml      # default sink configuration
+│       ├── fetcher.py             # FiFetcher (data fetching transform)
+│       ├── parser.py              # FiAggParser / FiActParser (parsing transforms)
+│       ├── sinks.py               # DatabaseSink (storage transform)
+│       └── sinkmap.yaml           # plugin configuration
 │
-├── sinks/                    # Cross-cutting outputs
-│   ├── discord_sink.py       # Discord notifications
-│   ├── database_sink.py      # SQLite persistence
-│   └── telegram_sink.py      # Telegram notifications
-│
-├── config.yaml               # declarative service configuration
-├── main.py                   # standalone entry point
-└── integration_bridge.py     # bridge for existing Discord bot
+├── pipelines.yml                   # Declarative pipeline configuration
+├── main.py                         # Pipeline entry point
+└── integration_bridge.py           # Bridge for existing Discord bot
 ```
 
 ## Key Features
 
-- **Modular Design**: Clean separation between fetching, parsing, and sinking
-- **Async/Await**: Fully asynchronous with proper error handling
-- **Database**: SQLite with automatic migrations and connection pooling
-- **Retry Logic**: Robust HTTP client with exponential backoff
-- **Diff Detection**: Only processes/notifies on actual changes
+- **Plugin-Centric Architecture**: Auto-discovery of Transform classes from `plugins/` directory
+- **Transform-Based Pipeline**: All components implement `async def __call__(items: AsyncIterator[Any]) -> AsyncIterator[Any]`
+- **YAML Configuration**: Declarative pipeline definition without code changes
+- **Drop-in Plugins**: Add new functionality by dropping folders in `plugins/`
+- **Async Streaming**: Backpressure-aware processing with async iterators
+- **Context Management**: Automatic resource cleanup for sinks and transforms
 - **Type Safety**: Pydantic models throughout for validation
-- **Extensible**: Easy to add new data sources and output channels
+- **Robust Infrastructure**: HTTP retry logic, database migrations, WebSocket support
 
 ## Quick Start
 
 ### Standalone Usage
 
 ```bash
-cd new_implementation
+cd modular-scraping-platform
 pip install -r requirements.txt
 python main.py
+```
+
+The system will automatically discover plugins and run the pipelines defined in `pipelines.yml`.
+
+### Example Pipeline Configuration
+
+```yaml
+pipelines:
+  - name: "FI Short Interest Data"
+    chain:
+      - class: "fi_shortinterest.FiFetcher"
+        kwargs:
+          poll_interval: 300
+      - class: "fi_shortinterest.FiAggParser"
+      - class: "fi_shortinterest.FiActParser"  
+      - class: "fi_shortinterest.DatabaseSink"
+        kwargs:
+          db_path: "fi_shortinterest.db"
 ```
 
 ### Integration with Existing Discord Bot
 
 ```python
-from new_implementation.integration_bridge import start_fi_monitoring
+from integration_bridge import start_fi_monitoring
 
 # In your Discord bot setup
 bridge = await start_fi_monitoring(
@@ -73,12 +89,22 @@ bridge = await start_fi_monitoring(
 
 ## Configuration
 
-Edit `config.yaml` to customize:
-- Database path
-- Polling intervals
-- Discord channels
-- Tracked companies
-- Logging levels
+Edit `pipelines.yml` to define your data processing pipelines:
+
+```yaml
+pipelines:
+  - name: "My Data Pipeline"
+    chain:
+      - class: "my_plugin.DataFetcher"
+        kwargs:
+          api_key: "your-api-key"
+      - class: "my_plugin.DataParser"
+      - class: "my_plugin.DatabaseSink"
+        kwargs:
+          db_path: "data.db"
+```
+
+Each stage in the chain must implement the `Transform` interface with an `async __call__` method.
 
 ## Database Schema
 
@@ -90,10 +116,27 @@ The system automatically creates and migrates SQLite tables:
 
 ## Adding New Data Sources
 
-1. Create a new plugin directory under `plugins/`
-2. Implement `Fetcher` and `Parser` classes
-3. Add configuration to `config.yaml`
-4. Register with the orchestrator
+1. **Create a plugin directory** under `plugins/your_plugin_name/`
+2. **Implement Transform classes** that inherit from `core.interfaces.Transform`:
+   ```python
+   from core.interfaces import Transform
+   from typing import AsyncIterator, Any
+   
+   class MyFetcher(Transform):
+       async def __call__(self, items: AsyncIterator[Any]) -> AsyncIterator[Any]:
+           # Your fetching logic here
+           yield some_data
+   ```
+3. **Add to pipeline configuration** in `pipelines.yml`:
+   ```yaml
+   pipelines:
+     - name: "My Pipeline"
+       chain:
+         - class: "your_plugin_name.MyFetcher"
+         - class: "your_plugin_name.MyParser"
+         - class: "your_plugin_name.MySink"
+   ```
+4. **Run the system** - plugins are auto-discovered on startup!
 
 ## Development
 
@@ -114,4 +157,10 @@ mypy .
 
 ## Migration from Old System
 
-The `integration_bridge.py` provides a drop-in replacement for the old `fi_blankning.py` module. Simply replace your existing import and initialization code.
+The `integration_bridge.py` provides a drop-in replacement for the old system. The new architecture offers:
+
+- **Zero Registration**: Plugins are auto-discovered
+- **Declarative Configuration**: Pipeline chains defined in YAML
+- **Transform Pattern**: Unified `async __call__` interface for all components  
+- **Streaming Processing**: Async iterators enable backpressure and efficient memory usage
+- **Hot-Swappable**: Drop new plugins in `plugins/` directory and restart

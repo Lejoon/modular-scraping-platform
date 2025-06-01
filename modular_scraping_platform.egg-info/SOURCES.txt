@@ -3,7 +3,8 @@ pyproject.toml
 core/__init__.py
 core/interfaces.py
 core/models.py
-core/orchestrator.py
+core/pipeline_orchestrator.py
+core/plugin_loader.py
 core/infra/__init__.py
 core/infra/db.py
 core/infra/http.py
@@ -21,7 +22,4 @@ plugins/fi_shortinterest/__init__.py
 plugins/fi_shortinterest/diff_parser.py
 plugins/fi_shortinterest/fetcher.py
 plugins/fi_shortinterest/parser.py
-sinks/__init__.py
-sinks/database_sink.py
-sinks/discord_sink.py
-sinks/telegram_sink.py
+plugins/fi_shortinterest/sinks.py

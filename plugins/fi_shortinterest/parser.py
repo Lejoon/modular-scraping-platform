@@ -4,11 +4,11 @@ FI Short Interest Parsers - Parse ODS files into structured data.
 
 import io
 import logging
-from typing import Dict, List
+from typing import Dict, List, AsyncIterator, Any
 
 import pandas as pd
 
-from core.interfaces import Parser
+from core.interfaces import Parser, Transform
 from core.models import RawItem, ParsedItem
 
 
@@ -23,7 +23,7 @@ def _read_ods(raw: bytes, column_map: Dict[int, str]) -> pd.DataFrame:
     return df
 
 
-class FiAggParser(Parser):
+class FiAggParser(Parser, Transform):
     """Parser for FI aggregate short interest data."""
     
     name = "FiAggParser"
@@ -62,8 +62,16 @@ class FiAggParser(Parser):
             logger.error(f"Failed to parse aggregate data: {e}")
             return []
 
+    async def __call__(self, items: AsyncIterator[Any]) -> AsyncIterator[ParsedItem]:
+        """Transform interface: parse RawItems into ParsedItems."""
+        async for item in items:
+            if isinstance(item, RawItem):
+                parsed_items = await self.parse(item)
+                for parsed in parsed_items:
+                    yield parsed
 
-class FiActParser(Parser):
+
+class FiActParser(Parser, Transform):
     """Parser for FI current position data."""
     
     name = "FiActParser"
@@ -104,3 +112,11 @@ class FiActParser(Parser):
         except Exception as e:
             logger.error(f"Failed to parse position data: {e}")
             return []
+
+    async def __call__(self, items: AsyncIterator[Any]) -> AsyncIterator[ParsedItem]:
+        """Transform interface: parse RawItems into ParsedItems."""
+        async for item in items:
+            if isinstance(item, RawItem):
+                parsed_items = await self.parse(item)
+                for parsed in parsed_items:
+                    yield parsed

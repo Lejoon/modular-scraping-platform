@@ -1,5 +1,5 @@
 """
-Database sink for persisting data to SQLite.
+Database sink that implements the Transform interface.
 """
 
 import logging

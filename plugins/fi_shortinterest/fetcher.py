@@ -4,12 +4,12 @@ FI Short Interest Fetcher - Downloads ODS files from Finansinspektionen.
 
 import logging
 from datetime import datetime
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator, Optional, Any
 
 import aiohttp
 from bs4 import BeautifulSoup
 
-from core.interfaces import Fetcher
+from core.interfaces import Fetcher, Transform
 from core.models import RawItem
 from core.infra.http import HttpClient
 
@@ -17,7 +17,7 @@ from core.infra.http import HttpClient
 logger = logging.getLogger(__name__)
 
 
-class FiFetcher(Fetcher):
+class FiFetcher(Fetcher, Transform):
     """Fetches short interest data from Finansinspektionen."""
     
     name = "FiFetcher"
@@ -67,3 +67,11 @@ class FiFetcher(Fetcher):
             # Don't re-raise to allow scheduler to continue
         finally:
             await self.http.close()
+
+    async def __call__(self, items: AsyncIterator[Any]) -> AsyncIterator[RawItem]:
+        """Transform interface: ignore input stream and yield fetched items."""
+        async for item in items:
+            # For fetchers, we ignore the input stream and start fresh
+            async for raw_item in self.fetch():
+                yield raw_item
+            break  # Only process one input item to trigger fetching

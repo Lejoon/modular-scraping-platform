@@ -1,0 +1,34 @@
+pipelines:
+  # FI Short Interest - Aggregate data pipeline
+  fi_shortinterest_agg:
+    chain:
+      - class: fi_shortinterest.FiFetcher
+        kwargs: {}
+      - class: fi_shortinterest.FiAggParser
+        kwargs: {}
+      - class: fi_shortinterest.DatabaseSink
+        kwargs:
+          db_path: "fi_shortinterest.db"
+
+  # FI Short Interest - Position data pipeline  
+  fi_shortinterest_pos:
+    chain:
+      - class: fi_shortinterest.FiFetcher
+        kwargs: {}
+      - class: fi_shortinterest.FiActParser
+        kwargs: {}
+      - class: fi_shortinterest.DatabaseSink
+        kwargs:
+          db_path: "fi_shortinterest.db"
+
+  # Example: Test pipeline for future use
+  # test_pipeline:
+  #   chain:
+  #     - class: test_plugin.TestFetcher
+  #       kwargs:
+  #         url: "https://example.com/api"
+  #     - class: test_plugin.TestParser
+  #       kwargs: {}
+  #     - class: test_plugin.TestSink
+  #       kwargs:
+  #         output_file: "test_output.json"

@@ -14,7 +14,7 @@ class Transform(ABC):
     """Universal transform interface for plugin pipeline stages.
     
     This is the core abstraction that enables plugin chaining.
-    Any stage in a pipeline (fetcher, parser, sink) implements this interface.
+    Any stage in a pipeline implements this interface.
     """
     
     @abstractmethod
@@ -25,8 +25,11 @@ class Transform(ABC):
         ...
 
 
-class Fetcher(ABC):
-    """Abstract base class for data fetchers."""
+class Fetcher(Transform):
+    """Abstract base class for data fetchers.
+    
+    Fetchers are specialized transforms that typically ignore input and yield RawItems.
+    """
     
     @property
     @abstractmethod
@@ -39,24 +42,20 @@ class Fetcher(ABC):
         """Fetch raw data items."""
         pass
 
+    async def __call__(self, items: AsyncIterator[Any]) -> AsyncIterator[RawItem]:
+        """Transform interface: ignore input stream and yield fetched items."""
+        async for item in items:
+            # For fetchers, we ignore the input stream and start fresh
+            async for raw_item in self.fetch():
+                yield raw_item
+            break  # Only process one input item to trigger fetching
 
-class Parser(ABC):
-    """Abstract base class for data parsers."""
+
+class Sink(Transform):
+    """Abstract base class for data sinks.
     
-    @property
-    @abstractmethod
-    def name(self) -> str:
-        """Human-readable name for this parser."""
-        pass
-
-    @abstractmethod
-    async def parse(self, item: RawItem) -> List[ParsedItem]:
-        """Parse a raw item into structured data."""
-        pass
-
-
-class Sink(ABC):
-    """Abstract base class for data sinks."""
+    Sinks are specialized transforms that consume items and yield them unchanged.
+    """
     
     @property
     @abstractmethod
@@ -65,6 +64,12 @@ class Sink(ABC):
         pass
 
     @abstractmethod
-    async def handle(self, item: ParsedItem) -> None:
-        """Handle a parsed item."""
+    async def handle(self, item: Any) -> None:
+        """Handle an item."""
         pass
+
+    async def __call__(self, items: AsyncIterator[Any]) -> AsyncIterator[Any]:
+        """Transform interface: handle items and pass them through."""
+        async for item in items:
+            await self.handle(item)
+            yield item

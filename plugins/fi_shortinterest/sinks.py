@@ -5,7 +5,7 @@ Database sink that implements the Transform interface.
 import logging
 from typing import Dict, List, AsyncIterator, Any
 
-from core.interfaces import Sink, Transform
+from core.interfaces import Sink
 from core.models import ParsedItem
 from core.infra.db import Database
 
@@ -13,7 +13,7 @@ from core.infra.db import Database
 logger = logging.getLogger(__name__)
 
 
-class DatabaseSink(Sink, Transform):
+class DatabaseSink(Sink):
     """Sink that persists data to SQLite database."""
     
     name = "DatabaseSink"

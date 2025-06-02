@@ -8,7 +8,7 @@ from typing import Dict, List, AsyncIterator, Any
 
 import pandas as pd
 
-from core.interfaces import Parser, Transform
+from core.interfaces import Transform
 from core.models import RawItem, ParsedItem
 
 
@@ -23,7 +23,7 @@ def _read_ods(raw: bytes, column_map: Dict[int, str]) -> pd.DataFrame:
     return df
 
 
-class FiAggParser(Parser, Transform):
+class FiAggParser(Transform):
     """Parser for FI aggregate short interest data."""
     
     name = "FiAggParser"
@@ -71,7 +71,7 @@ class FiAggParser(Parser, Transform):
                     yield parsed
 
 
-class FiActParser(Parser, Transform):
+class FiActParser(Transform):
     """Parser for FI current position data."""
     
     name = "FiActParser"

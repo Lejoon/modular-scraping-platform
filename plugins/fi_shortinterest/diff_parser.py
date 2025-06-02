@@ -5,13 +5,13 @@ Diff parser for detecting changes in scraped data.
 import logging
 from typing import List, Dict, Any, AsyncIterator
 
-from core.interfaces import Parser, Transform
+from core.interfaces import Transform
 from core.models import ParsedItem
 from core.infra.db import Database
 
 logger = logging.getLogger(__name__)
 
-class DiffParser(Parser, Transform):
+class DiffParser(Transform):
     """Parser that compares ParsedItems against the last saved state and emits only changes."""
     
     name = "DiffParser"

@@ -76,6 +76,77 @@ class DatabaseSink(Sink):
         """Initialize DatabaseSink with configurable database path."""
         self.db = Database(db_path)
 
+    async def _create_tables(self) -> None:
+        """Create FI short interest tables."""
+        # Create main tables
+        await self.db.execute("""
+            CREATE TABLE IF NOT EXISTS short_positions (
+                lei TEXT PRIMARY KEY,
+                company_name TEXT NOT NULL,
+                position_percent REAL NOT NULL,
+                latest_position_date TEXT,
+                timestamp TEXT NOT NULL
+            )
+        """)
+        
+        await self.db.execute("""
+            CREATE TABLE IF NOT EXISTS position_holders (
+                entity_name TEXT NOT NULL,
+                issuer_name TEXT NOT NULL,
+                isin TEXT NOT NULL,
+                position_percent REAL NOT NULL,
+                position_date TEXT,
+                timestamp TEXT NOT NULL,
+                comment TEXT,
+                PRIMARY KEY (entity_name, issuer_name, isin)
+            )
+        """)
+        
+        # Create history tables
+        await self.db.execute("""
+            CREATE TABLE IF NOT EXISTS short_positions_history (
+                lei TEXT NOT NULL,
+                company_name TEXT NOT NULL,
+                position_percent REAL NOT NULL,
+                latest_position_date TEXT,
+                event_timestamp TEXT NOT NULL,
+                old_pct REAL,
+                new_pct REAL,
+                PRIMARY KEY (lei, event_timestamp)
+            )
+        """)
+        
+        await self.db.execute("""
+            CREATE TABLE IF NOT EXISTS position_holders_history (
+                entity_name TEXT NOT NULL,
+                issuer_name TEXT NOT NULL,
+                isin TEXT NOT NULL,
+                position_percent REAL NOT NULL,
+                position_date TEXT,
+                event_timestamp TEXT NOT NULL,
+                comment TEXT,
+                old_pct REAL,
+                new_pct REAL,
+                PRIMARY KEY (entity_name, issuer_name, isin, event_timestamp)
+            )
+        """)
+        
+        # Create indexes for better performance
+        await self.db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_short_positions_company 
+            ON short_positions(company_name)
+        """)
+        
+        await self.db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_position_holders_issuer 
+            ON position_holders(issuer_name)
+        """)
+        
+        await self.db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_position_holders_timestamp 
+            ON position_holders(timestamp)
+        """)
+
     async def handle(self, item: ParsedItem) -> None:
         """Handle a parsed item by persisting to database."""
         if item.topic not in self._TABLE_MAP:
@@ -118,6 +189,8 @@ class DatabaseSink(Sink):
 
     async def __aenter__(self):
         """Async context manager entry."""
+        await self.db.connect()
+        await self._create_tables()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):

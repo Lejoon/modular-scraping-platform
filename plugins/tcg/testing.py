@@ -443,7 +443,7 @@ def test_price_history_api(product_id=None):
         }
     
     # Save the price history data to database
-    save_price_history_data(price_data)
+    save_price_history_data(price_data, 624679)  # Using the example product ID
     print("Price history data saved to database")
 
 

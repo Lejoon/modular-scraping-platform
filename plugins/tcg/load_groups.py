@@ -79,10 +79,14 @@ def load_all():
     load_groups()
     load_pokemon_sets()
 
-def save_price_history_data(price_history_response):
+def save_price_history_data(price_history_response, product_id):
     """
     Save price history data from the TCGPlayer API response to the database.
     Expected response format from https://infinite-api.tcgplayer.com/price/history/{product_id}/detailed?range=annual
+    
+    Args:
+        price_history_response: The JSON response from the price history API
+        product_id: The product ID that was queried (our booster/booster_box ID)
     """
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -108,10 +112,10 @@ def save_price_history_data(price_history_response):
                 # Insert or ignore (due to UNIQUE constraint on sku_id + bucket_start_date)
                 c.execute("""
                     INSERT OR IGNORE INTO price_history 
-                    (sku_id, variant, language, condition, market_price, quantity_sold, 
+                    (product_id, sku_id, variant, language, condition, market_price, quantity_sold, 
                      low_sale_price, high_sale_price, bucket_start_date)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (sku_id, variant, language, condition, market_price, quantity_sold,
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (product_id, sku_id, variant, language, condition, market_price, quantity_sold,
                       low_sale_price, high_sale_price, bucket_start_date))
                 
                 if c.rowcount > 0:
@@ -150,7 +154,7 @@ def fetch_and_save_price_history(product_id, headers=None):
         response.raise_for_status()
         price_data = response.json()
         
-        save_price_history_data(price_data)
+        save_price_history_data(price_data, product_id)
         print(f"Successfully fetched and saved price history for product {product_id}")
         
     except requests.exceptions.RequestException as e:
@@ -158,12 +162,12 @@ def fetch_and_save_price_history(product_id, headers=None):
     except Exception as e:
         print(f"Error processing price history data for product {product_id}: {e}")
 
-def get_latest_bucket_date(sku_id):
+def get_latest_bucket_date(product_id):
     """
-    Get the latest bucket date for a given SKU to determine what new data to fetch.
+    Get the latest bucket date for a given product_id to determine what new data to fetch.
     
     Args:
-        sku_id: The SKU ID to check
+        product_id: The product ID to check
         
     Returns:
         The latest bucket_start_date as a string, or None if no data exists
@@ -174,13 +178,243 @@ def get_latest_bucket_date(sku_id):
     c.execute("""
         SELECT MAX(bucket_start_date) 
         FROM price_history 
-        WHERE sku_id = ?
-    """, (sku_id,))
+        WHERE product_id = ?
+    """, (product_id,))
     
     result = c.fetchone()
     conn.close()
     
     return result[0] if result and result[0] else None
+
+def fetch_pokemon_sets_price_history(delay_seconds=1):
+    """
+    Fetch price history for all booster and booster box products in the pokemon_sets table.
+    
+    Args:
+        delay_seconds: Delay between API calls to avoid rate limiting
+    """
+    import time
+    
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    # Get all Pokemon sets with their product IDs
+    c.execute("""
+        SELECT id, set_name, booster_product_id, booster_box_product_id
+        FROM pokemon_sets
+        WHERE booster_product_id IS NOT NULL OR booster_box_product_id IS NOT NULL
+        ORDER BY id
+    """)
+    
+    sets = c.fetchall()
+    conn.close()
+    
+    total_sets = len(sets)
+    processed_count = 0
+    
+    print(f"Found {total_sets} Pokemon sets to process")
+    
+    for set_id, set_name, booster_id, booster_box_id in sets:
+        processed_count += 1
+        print(f"\n[{processed_count}/{total_sets}] Processing: {set_name}")
+        
+        # Fetch booster product price history
+        if booster_id:
+            print(f"  Fetching booster price history (ID: {booster_id})")
+            fetch_and_save_price_history(booster_id)
+            time.sleep(delay_seconds)
+            
+        # Fetch booster box product price history  
+        if booster_box_id:
+            print(f"  Fetching booster box price history (ID: {booster_box_id})")
+            fetch_and_save_price_history(booster_box_id)
+            time.sleep(delay_seconds)
+    
+    print(f"\nCompleted processing {processed_count} Pokemon sets")
+
+def fetch_pokemon_sets_price_history_incremental(delay_seconds=1):
+    """
+    Fetch only new price history data for Pokemon sets by checking existing data first.
+    This is more efficient for regular updates.
+    
+    Args:
+        delay_seconds: Delay between API calls to avoid rate limiting
+    """
+    import time
+    
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    # Get all Pokemon sets with their product IDs
+    c.execute("""
+        SELECT id, set_name, booster_product_id, booster_box_product_id
+        FROM pokemon_sets
+        WHERE booster_product_id IS NOT NULL OR booster_box_product_id IS NOT NULL
+        ORDER BY id
+    """)
+    
+    sets = c.fetchall()
+    conn.close()
+    
+    total_sets = len(sets)
+    processed_count = 0
+    
+    print(f"Found {total_sets} Pokemon sets for incremental update")
+    
+    for set_id, set_name, booster_id, booster_box_id in sets:
+        processed_count += 1
+        print(f"\n[{processed_count}/{total_sets}] Processing: {set_name}")
+        
+        # Check booster product
+        if booster_id:
+            latest_date = get_latest_bucket_date(booster_id)
+            if latest_date:
+                print(f"  Booster (ID: {booster_id}) - Latest data: {latest_date}")
+            else:
+                print(f"  Booster (ID: {booster_id}) - No existing data, fetching all")
+            
+            fetch_and_save_price_history(booster_id)
+            time.sleep(delay_seconds)
+            
+        # Check booster box product
+        if booster_box_id:
+            latest_date = get_latest_bucket_date(booster_box_id)
+            if latest_date:
+                print(f"  Booster Box (ID: {booster_box_id}) - Latest data: {latest_date}")
+            else:
+                print(f"  Booster Box (ID: {booster_box_id}) - No existing data, fetching all")
+                
+            fetch_and_save_price_history(booster_box_id)
+            time.sleep(delay_seconds)
+    
+    print(f"\nCompleted incremental update for {processed_count} Pokemon sets")
+
+def get_pokemon_sets_summary():
+    """
+    Get a summary of Pokemon sets and their price history data status.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    c.execute("""
+        SELECT 
+            ps.set_name,
+            ps.booster_product_id,
+            ps.booster_box_product_id,
+            COUNT(CASE WHEN ph.product_id = ps.booster_product_id THEN 1 END) as booster_records,
+            COUNT(CASE WHEN ph.product_id = ps.booster_box_product_id THEN 1 END) as booster_box_records,
+            MAX(CASE WHEN ph.product_id = ps.booster_product_id THEN ph.bucket_start_date END) as booster_latest_date,
+            MAX(CASE WHEN ph.product_id = ps.booster_box_product_id THEN ph.bucket_start_date END) as booster_box_latest_date
+        FROM pokemon_sets ps
+        LEFT JOIN price_history ph ON (
+            ph.product_id = ps.booster_product_id OR 
+            ph.product_id = ps.booster_box_product_id
+        )
+        GROUP BY ps.id, ps.set_name, ps.booster_product_id, ps.booster_box_product_id
+        ORDER BY ps.id
+    """)
+    
+    results = c.fetchall()
+    conn.close()
+    
+    print("Pokemon Sets Price History Summary:")
+    print("=" * 120)
+    print(f"{'Set Name':<35} {'Booster ID':<12} {'Box ID':<12} {'Boost Rec':<10} {'Box Rec':<10} {'Boost Latest':<12} {'Box Latest':<12}")
+    print("-" * 120)
+    
+    for row in results:
+        set_name, booster_id, box_id, booster_recs, box_recs, booster_date, box_date = row
+        print(f"{set_name[:34]:<35} {booster_id or 'N/A':<12} {box_id or 'N/A':<12} {booster_recs:<10} {box_recs:<10} {booster_date or 'N/A':<12} {box_date or 'N/A':<12}")
+
+def fetch_all_pokemon_price_history(delay_seconds=2, skip_existing=True):
+    """
+    Fetch price history for all Pokemon sets with comprehensive error handling.
+    
+    Args:
+        delay_seconds: Delay between API calls to avoid rate limiting
+        skip_existing: If True, skip products that already have recent data
+    """
+    import time
+    
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    # Get all Pokemon sets with their product IDs
+    c.execute("""
+        SELECT id, set_name, booster_product_id, booster_box_product_id
+        FROM pokemon_sets
+        WHERE booster_product_id IS NOT NULL OR booster_box_product_id IS NOT NULL
+        ORDER BY id
+    """)
+    
+    sets = c.fetchall()
+    conn.close()
+    
+    total_sets = len(sets)
+    processed_count = 0
+    success_count = 0
+    error_count = 0
+    
+    print(f"Starting price history fetch for {total_sets} Pokemon sets")
+    print(f"Delay between requests: {delay_seconds}s")
+    print(f"Skip existing data: {skip_existing}")
+    print("=" * 80)
+    
+    for set_id, set_name, booster_id, booster_box_id in sets:
+        processed_count += 1
+        print(f"\n[{processed_count}/{total_sets}] Processing: {set_name}")
+        
+        # Process booster product
+        if booster_id:
+            try:
+                if skip_existing:
+                    latest_date = get_latest_bucket_date(booster_id)
+                    if latest_date and latest_date >= '2025-06-01':  # Has recent data
+                        print(f"  ✓ Booster (ID: {booster_id}) - Skipping, has recent data: {latest_date}")
+                    else:
+                        print(f"  → Fetching booster price history (ID: {booster_id})")
+                        fetch_and_save_price_history(booster_id)
+                        success_count += 1
+                        time.sleep(delay_seconds)
+                else:
+                    print(f"  → Fetching booster price history (ID: {booster_id})")
+                    fetch_and_save_price_history(booster_id)
+                    success_count += 1
+                    time.sleep(delay_seconds)
+                    
+            except Exception as e:
+                print(f"  ✗ Error fetching booster (ID: {booster_id}): {e}")
+                error_count += 1
+                
+        # Process booster box product
+        if booster_box_id:
+            try:
+                if skip_existing:
+                    latest_date = get_latest_bucket_date(booster_box_id)
+                    if latest_date and latest_date >= '2025-06-01':  # Has recent data
+                        print(f"  ✓ Booster Box (ID: {booster_box_id}) - Skipping, has recent data: {latest_date}")
+                    else:
+                        print(f"  → Fetching booster box price history (ID: {booster_box_id})")
+                        fetch_and_save_price_history(booster_box_id)
+                        success_count += 1
+                        time.sleep(delay_seconds)
+                else:
+                    print(f"  → Fetching booster box price history (ID: {booster_box_id})")
+                    fetch_and_save_price_history(booster_box_id)
+                    success_count += 1
+                    time.sleep(delay_seconds)
+                    
+            except Exception as e:
+                print(f"  ✗ Error fetching booster box (ID: {booster_box_id}): {e}")
+                error_count += 1
+    
+    print("\n" + "=" * 80)
+    print(f"Completed processing {processed_count} Pokemon sets")
+    print(f"Successful API calls: {success_count}")
+    print(f"Errors encountered: {error_count}")
+    
+    # Show final summary
+    get_pokemon_sets_summary()
 
 if __name__ == "__main__":
     load_all()

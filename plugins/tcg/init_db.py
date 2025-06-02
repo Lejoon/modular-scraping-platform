@@ -44,6 +44,7 @@ def init_db():
     c.execute("""
         CREATE TABLE IF NOT EXISTS price_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_id INTEGER NOT NULL,
             sku_id TEXT NOT NULL,
             variant TEXT,
             language TEXT,

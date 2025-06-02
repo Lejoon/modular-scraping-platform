@@ -18,7 +18,7 @@ Design the framework around the **stable axis** (behaviours & infra). Everything
 
 ## 2. Define canonical interfaces
 
-The platform uses a **clean Transform-based architecture** with three core components:
+The platform uses a **Transform-based architecture** where all components implement a universal interface:
 
 ```python
 from abc import ABC, abstractmethod
@@ -47,10 +47,10 @@ class Event(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 class Transform(ABC):
-    """Universal transform interface for all pipeline stages.
+    """Universal transform interface for plugin pipeline stages.
     
     This is the core abstraction that enables plugin chaining.
-    All pipeline components (data processors, fetchers, sinks) inherit from this.
+    Any stage in a pipeline (fetcher, parser, sink) implements this interface.
     """
     
     @abstractmethod
@@ -60,12 +60,8 @@ class Transform(ABC):
         """Transform an async iterator of items to another async iterator."""
         ...
 
-class Fetcher(Transform):
-    """Specialized Transform for data fetching.
-    
-    Fetchers ignore their input stream and yield RawItems from external sources.
-    """
-    
+# Legacy interfaces still supported for backward compatibility
+class Fetcher(ABC):
     @property
     @abstractmethod
     def name(self) -> str:
@@ -73,22 +69,19 @@ class Fetcher(Transform):
 
     @abstractmethod
     async def fetch(self) -> AsyncIterator[RawItem]:
-        """Fetch data from external source."""
         ...
 
-    async def __call__(self, items: AsyncIterator[Any]) -> AsyncIterator[RawItem]:
-        """Transform interface: ignore input and yield fetched items."""
-        async for _ in items:
-            async for raw_item in self.fetch():
-                yield raw_item
-            break  # Process one input to trigger fetch
+class Parser(ABC):
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        pass
 
-class Sink(Transform):
-    """Specialized Transform for data persistence/output.
-    
-    Sinks handle items (usually ParsedItems) and may yield None to complete chains.
-    """
-    
+    @abstractmethod
+    async def parse(self, item: RawItem) -> List[ParsedItem]:
+        ...
+
+class Sink(ABC):
     @property
     @abstractmethod
     def name(self) -> str:
@@ -96,15 +89,7 @@ class Sink(Transform):
 
     @abstractmethod
     async def handle(self, item: ParsedItem) -> None:
-        """Handle/persist a parsed item."""
         ...
-
-    async def __call__(self, items: AsyncIterator[Any]) -> AsyncIterator[None]:
-        """Transform interface: handle items and complete the chain."""
-        async for item in items:
-            if isinstance(item, ParsedItem):
-                await self.handle(item)
-            yield None  # Sinks complete the pipeline
 ```
 
 Everything you scrape must be expressible as a Transform chain:
@@ -120,11 +105,7 @@ graph LR
     Diff2 --> Sink
 ```
 
-**Key Architecture Benefits**:
-- **Single inheritance hierarchy**: All components inherit from `Transform`
-- **Built-in chaining**: `Fetcher` and `Sink` provide `__call__` implementations
-- **Clean separation**: Fetchers get data, Transforms process data, Sinks persist data
-- **No legacy cruft**: Single interface pattern with specialized subclasses
+**Key Innovation**: All pipeline stages implement both their legacy interface (Fetcher/Parser/Sink) AND the `Transform` interface, enabling seamless chaining without special cases.
 
 ---
 
@@ -197,44 +178,32 @@ All plugins import from these; none re-implement them.
 
 ---
 
-## 6. Clean Transform Architecture - Single Inheritance Pattern
+## 6. Dual Interface Pattern - Composition over Inheritance
 
 Example from FI Short Interest plugin:
 
 ```python
-class FiFetcher(Fetcher):
-    """Data fetcher with built-in Transform interface."""
-    
-    name = "FiFetcher"
+class FiFetcher(Fetcher, Transform):
+    """Implements both legacy Fetcher interface and Transform interface."""
     
     async def fetch(self) -> AsyncIterator[RawItem]:
-        """Fetch ODS files from Finansinspektionen."""
-        # Poll timestamp and download files if changed
-        html = await self.http.get_text(self.URL_TS)
+        # Legacy interface implementation
         # ... fetch logic
-        if ts and ts != self._last_seen:
-            agg_bytes = await self.http.get_bytes(self.URL_AGG)
-            act_bytes = await self.http.get_bytes(self.URL_ACT)
-            yield RawItem(source="fi.short.agg", payload=agg_bytes, fetched_at=now)
-            yield RawItem(source="fi.short.act", payload=act_bytes, fetched_at=now)
-    
-    # __call__ method provided by Fetcher base class
+        
+    async def __call__(self, items: AsyncIterator[Any]) -> AsyncIterator[RawItem]:
+        """Transform interface: ignore input stream and yield fetched items."""
+        async for item in items:
+            async for raw_item in self.fetch():
+                yield raw_item
+            break  # Only process one input item to trigger fetching
 
-class FiAggParser(Transform):
-    """Parse aggregate short interest data."""
-    
-    name = "FiAggParser"
+class FiAggParser(Parser, Transform):
+    """Implements both legacy Parser interface and Transform interface."""
     
     async def parse(self, item: RawItem) -> List[ParsedItem]:
-        """Parse aggregate ODS data."""
-        if not item.source.endswith("agg"):
-            return []
-        
-        df = _read_ods(item.payload, self._cols)
+        # Legacy interface implementation
         # ... parsing logic
-        return [ParsedItem(topic="fi.short.aggregate", content=rec, discovered_at=item.fetched_at)
-                for rec in df.to_dict("records")]
-    
+        
     async def __call__(self, items: AsyncIterator[Any]) -> AsyncIterator[ParsedItem]:
         """Transform interface: parse RawItems into ParsedItems."""
         async for item in items:
@@ -243,33 +212,22 @@ class FiAggParser(Transform):
                 for parsed in parsed_items:
                     yield parsed
 
-class DatabaseSink(Sink):
-    """Database persistence with built-in Transform interface."""
-    
-    name = "DatabaseSink"
+class DatabaseSink(Sink, Transform):
+    """Implements both legacy Sink interface and Transform interface."""
     
     async def handle(self, item: ParsedItem) -> None:
-        """Persist ParsedItem to database."""
-        config = self._TABLE_MAP.get(item.topic)
-        if config:
-            await self.db.upsert(config["table"], item.content, config["pk"])
-    
-    # __call__ method provided by Sink base class
-    
-    async def __aenter__(self):
-        """Async context manager for resource management."""
-        await self.db.connect()
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await self.db.close()
+        # Legacy interface implementation
+        # ... sink logic
+        
+    async def __call__(self, items: AsyncIterator[Any]) -> AsyncIterator[None]:
+        """Transform interface: handle ParsedItems and pass them through."""
+        async for item in items:
+            if isinstance(item, ParsedItem):
+                await self.handle(item)
+            yield None  # Sinks complete the chain
 ```
 
-**Benefits of Single Inheritance**:
-- **Clean hierarchy**: `Transform` → `Fetcher`/`Sink` specializations
-- **No multiple inheritance**: Eliminates diamond problem and complexity
-- **Built-in chaining**: `Fetcher` and `Sink` provide `__call__` implementations
-- **Resource management**: Async context managers for proper cleanup
+This pattern allows legacy code to work while enabling the new Transform pipeline.
 
 ---
 
@@ -278,7 +236,7 @@ class DatabaseSink(Sink):
 ### Change Detection with DiffParser
 
 ```python
-class DiffParser(Transform):
+class DiffParser(Parser, Transform):
     """Compares ParsedItems against database state and emits only changes."""
     
     async def parse(self, item: ParsedItem) -> List[ParsedItem]:
@@ -304,7 +262,7 @@ class DiffParser(Transform):
 ### Automatic Resource Management
 
 ```python
-class DatabaseSink(Sink):
+class DatabaseSink(Sink, Transform):
     async def __aenter__(self):
         """Async context manager entry."""
         await self.db.connect()
@@ -341,13 +299,13 @@ def refresh_registry() -> None:
 
 ## 8. Migration path for existing code
 
-1. **Update inheritance**: Change from multiple inheritance to single inheritance from Transform/Fetcher/Sink
-2. **Implement Transform interface**: Ensure all classes have proper `__call__` method  
+1. **Implement dual interfaces**: Make existing classes inherit from both legacy interface and `Transform`
+2. **Add `__call__` method**: Implement the Transform interface as a wrapper around legacy methods
 3. **Add plugin configuration**: Drop plugin folder in `plugins/` directory with YAML config
 4. **Gradual migration**: Run new and old systems side-by-side until parity achieved
 5. **Resource cleanup**: Add async context manager support (`__aenter__`/`__aexit__`) for proper cleanup
 
-The clean Transform architecture eliminates multiple inheritance complexity while maintaining full functionality.
+The architecture supports both patterns simultaneously, enabling gradual migration without breaking changes.
 
 ---
 

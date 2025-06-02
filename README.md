@@ -8,7 +8,7 @@ A plugin-centric framework for building data processing pipelines with automatic
 modular-scraping-platform/
 │
 ├── core/                           # Core framework
-│   ├── interfaces.py              # Transform interface + legacy abstractions
+│   ├── interfaces.py              # Transform interface with Fetcher/Sink specializations
 │   ├── models.py                  # RawItem, ParsedItem, Event models
 │   ├── plugin_loader.py           # Automatic plugin discovery system
 │   ├── pipeline_orchestrator.py   # Pipeline execution engine with context management
@@ -21,10 +21,10 @@ modular-scraping-platform/
 │
 ├── plugins/                        # Auto-discovered plugins (zero registration)
 │   └── fi_shortinterest/          # Example: FI Short Interest plugin
-│       ├── fetcher.py             # FiFetcher (data fetching transform)
-│       ├── parser.py              # FiAggParser / FiActParser (parsing transforms)
-│       ├── diff_parser.py         # DiffParser (change detection transform)
-│       ├── sinks.py               # DatabaseSink (storage transform)
+│       ├── fetcher.py             # FiFetcher (Fetcher specialization)
+│       ├── parser.py              # FiAggParser / FiActParser (Transform implementations)
+│       ├── diff_parser.py         # DiffParser (Transform implementation)
+│       ├── sinks.py               # DatabaseSink (Sink specialization)
 │       └── __init__.py            # Plugin exports
 │
 ├── pipelines.yml                   # Declarative pipeline configuration
@@ -37,7 +37,7 @@ modular-scraping-platform/
 ## Key Features
 
 - **Zero-Registration Plugin System**: Drop plugin folders in `plugins/` directory - automatic discovery on startup
-- **Dual Interface Architecture**: All components implement both legacy interfaces (Fetcher/Parser/Sink) AND Transform interface
+- **Clean Transform Architecture**: All components inherit from Transform base class with Fetcher/Sink specializations
 - **Transform-Based Pipeline**: Universal `async def __call__(items: AsyncIterator[Any]) -> AsyncIterator[Any]` interface enables seamless chaining
 - **YAML Configuration**: Declarative pipeline definition with no code changes required
 - **Async Streaming**: Backpressure-aware processing with async iterators and context management
@@ -184,63 +184,48 @@ The system automatically creates and migrates SQLite tables based on the ParsedI
 
 1. **Create a plugin directory** under `plugins/your_plugin_name/`
 
-2. **Implement Transform classes** that inherit from both legacy and Transform interfaces:
+2. **Implement Transform classes** that inherit from the appropriate base classes:
    ```python
-   from core.interfaces import Fetcher, Parser, Sink, Transform
+   from core.interfaces import Fetcher, Sink, Transform
    from core.models import RawItem, ParsedItem
    from typing import AsyncIterator, Any, List
    
-   class MyFetcher(Fetcher, Transform):
+   class MyFetcher(Fetcher):
        name = "MyFetcher"
        
        async def fetch(self) -> AsyncIterator[RawItem]:
-           # Legacy interface: your fetching logic here
+           # Your fetching logic here
            yield RawItem(source="my.source", payload=b"data", fetched_at=datetime.utcnow())
        
-       async def __call__(self, items: AsyncIterator[Any]) -> AsyncIterator[RawItem]:
-           # Transform interface: ignore input and yield fetched items
-           async for item in items:
-               async for raw_item in self.fetch():
-                   yield raw_item
-               break  # Only process one input to trigger fetching
+       # __call__ method provided by Fetcher base class
 
-   class MyParser(Parser, Transform):
-       name = "MyParser"
-       
-       async def parse(self, item: RawItem) -> List[ParsedItem]:
-           # Legacy interface: parse raw data
-           return [ParsedItem(topic="my.topic", content={"key": "value"})]
+   class MyDataProcessor(Transform):
+       name = "MyDataProcessor"
        
        async def __call__(self, items: AsyncIterator[Any]) -> AsyncIterator[ParsedItem]:
-           # Transform interface: parse items
+           # Transform interface: process items
            async for item in items:
                if isinstance(item, RawItem):
-                   parsed_items = await self.parse(item)
-                   for parsed in parsed_items:
-                       yield parsed
+                   # Process your data
+                   yield ParsedItem(topic="my.topic", content={"key": "value"})
 
-   class MySink(Sink, Transform):
+   class MySink(Sink):
        name = "MySink"
        
        async def handle(self, item: ParsedItem) -> None:
-           # Legacy interface: handle parsed item
+           # Handle parsed item
            print(f"Received: {item.topic}")
        
-       async def __call__(self, items: AsyncIterator[Any]) -> AsyncIterator[None]:
-           # Transform interface: handle items
-           async for item in items:
-               if isinstance(item, ParsedItem):
-                   await self.handle(item)
-               yield None  # Sinks complete the chain
+       # __call__ method provided by Sink base class
    ```
 
 3. **Add plugin exports** in `plugins/your_plugin_name/__init__.py`:
    ```python
    from .fetcher import MyFetcher
-   from .parser import MyParser
+   from .processors import MyDataProcessor
    from .sinks import MySink
    
-   __all__ = ["MyFetcher", "MyParser", "MySink"]
+   __all__ = ["MyFetcher", "MyDataProcessor", "MySink"]
    ```
 
 4. **Add to pipeline configuration** in `pipelines.yml`:
@@ -250,7 +235,7 @@ The system automatically creates and migrates SQLite tables based on the ParsedI
        chain:
          - class: "your_plugin_name.MyFetcher"
            kwargs: {}
-         - class: "your_plugin_name.MyParser"
+         - class: "your_plugin_name.MyDataProcessor"
            kwargs: {}
          - class: "your_plugin_name.MySink"
            kwargs: {}
@@ -277,7 +262,7 @@ python main.py
 ### Creating New Plugins
 
 1. Create directory structure: `plugins/your_plugin_name/`
-2. Implement classes inheriting from both legacy and Transform interfaces
+2. Implement classes inheriting from Transform, Fetcher, or Sink as appropriate
 3. Add exports to `__init__.py`
 4. Configure pipeline in `pipelines.yml`
 5. Test with `python main.py`
@@ -315,7 +300,7 @@ pytest
 The `misc/integration_bridge.py` provides a drop-in replacement for the old system. The new architecture offers:
 
 - **Zero Registration**: Plugins are auto-discovered from `plugins/` directory
-- **Dual Interface Support**: Legacy interfaces (Fetcher/Parser/Sink) work alongside Transform interface
+- **Clean Transform Architecture**: Single inheritance hierarchy with Transform as base class
 - **Declarative Configuration**: Pipeline chains defined in YAML without code changes
 - **Transform Pattern**: Universal `async __call__` interface for all components  
 - **Streaming Processing**: Async iterators enable backpressure and efficient memory usage
@@ -325,8 +310,8 @@ The `misc/integration_bridge.py` provides a drop-in replacement for the old syst
 
 ### Migration Strategy
 
-1. **Keep existing code**: Legacy interfaces still work
-2. **Add Transform interface**: Implement `__call__` method as wrapper around legacy methods
+1. **Update inheritance**: Change from multiple inheritance to single inheritance from Transform/Fetcher/Sink
+2. **Implement Transform interface**: Ensure all classes have proper `__call__` method
 3. **Move to plugins directory**: Organize code in `plugins/your_plugin/` structure
 4. **Create YAML config**: Define pipelines declaratively
 5. **Add resource management**: Implement `__aenter__`/`__aexit__` for cleanup (optional)

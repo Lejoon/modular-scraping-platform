@@ -30,15 +30,17 @@ class DatabaseSink(Sink, Transform):
                 "timestamp",
             ],
         },
-        "fi.short.aggregate.diff": {  # same table / cols
-            "table": "short_positions",
-            "pk": ["lei"],
+        "fi.short.aggregate.diff": {
+            "table": "short_positions_history",
+            "pk": ["lei", "event_timestamp"],
             "cols": [
                 "lei",
-                "company_name",
+                "company_name", 
                 "position_percent",
                 "latest_position_date",
-                "timestamp",
+                "event_timestamp",
+                "old_pct",
+                "new_pct",
             ],
         },
         "fi.short.positions": {
@@ -54,17 +56,18 @@ class DatabaseSink(Sink, Transform):
                 "comment",
             ],
         },
-        "fi.short.positions.diff": {  # ditto
-            "table": "position_holders",
-            "pk": ["entity_name", "issuer_name", "isin"],
+        "fi.short.positions.diff": {
+            "table": "position_holders_history", 
+            "pk": ["entity_name", "issuer_name", "isin", "event_timestamp"],
             "cols": [
                 "entity_name",
                 "issuer_name",
                 "isin",
                 "position_percent",
                 "position_date",
-                "timestamp",
-                "comment",
+                "event_timestamp",
+                "old_pct",
+                "new_pct",
             ],
         },
     }

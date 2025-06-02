@@ -3,15 +3,15 @@ Diff parser for detecting changes in scraped data.
 """
 
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, AsyncIterator
 
-from core.interfaces import Parser
+from core.interfaces import Parser, Transform
 from core.models import ParsedItem
 from core.infra.db import Database
 
 logger = logging.getLogger(__name__)
 
-class DiffParser(Parser):
+class DiffParser(Parser, Transform):
     """Parser that compares ParsedItems against the last saved state and emits only changes."""
     
     name = "DiffParser"
@@ -63,7 +63,17 @@ class DiffParser(Parser):
         # brand new
         if not previous:
             logger.info(f"New aggregate position detected: {lei}")
-            return [item.copy(update={"topic": "fi.short.aggregate.diff"})]
+            diff_content = item.content.copy()
+            diff_content.update({
+                "event_timestamp": item.discovered_at.isoformat(),
+                "old_pct": 0.0,
+                "new_pct": current_percent,
+            })
+            return [ParsedItem(
+                topic="fi.short.aggregate.diff",
+                content=diff_content,
+                discovered_at=item.discovered_at
+            )]
 
         prev_percent = float(previous["position_percent"])
         prev_date = previous["latest_position_date"] or ""
@@ -73,7 +83,10 @@ class DiffParser(Parser):
             logger.info(f"Aggregate position changed for {lei}: {prev_percent:.3f}% -> {current_percent:.3f}%")
             diff_content = item.content.copy()
             diff_content.update({
-                "previous_percent": prev_percent,
+                "event_timestamp": item.discovered_at.isoformat(),
+                "old_pct": prev_percent,
+                "new_pct": current_percent,
+                "previous_percent": prev_percent,  # Keep for backward compatibility
                 "percent_change": current_percent - prev_percent,
                 "previous_date": prev_date
             })
@@ -105,7 +118,17 @@ class DiffParser(Parser):
         # brand new
         if not previous:
             logger.info(f"New position detected: {entity_name} -> {issuer_name}")
-            return [item.copy(update={"topic": "fi.short.positions.diff"})]
+            diff_content = item.content.copy()
+            diff_content.update({
+                "event_timestamp": item.discovered_at.isoformat(),
+                "old_pct": 0.0,
+                "new_pct": current_percent,
+            })
+            return [ParsedItem(
+                topic="fi.short.positions.diff",
+                content=diff_content,
+                discovered_at=item.discovered_at
+            )]
 
         prev_percent = float(previous["position_percent"])
         prev_date = previous["position_date"] or ""
@@ -115,7 +138,10 @@ class DiffParser(Parser):
             logger.info(f"Position changed for {entity_name} -> {issuer_name}: {prev_percent:.3f}% -> {current_percent:.3f}%")
             diff_content = item.content.copy()
             diff_content.update({
-                "previous_percent": prev_percent,
+                "event_timestamp": item.discovered_at.isoformat(),
+                "old_pct": prev_percent,
+                "new_pct": current_percent,
+                "previous_percent": prev_percent,  # Keep for backward compatibility
                 "percent_change": current_percent - prev_percent,
                 "previous_date": prev_date
             })
@@ -131,3 +157,11 @@ class DiffParser(Parser):
         """Close database connection."""
         if self._initialized:
             await self.db.close()
+
+    async def __call__(self, items: AsyncIterator[Any]) -> AsyncIterator[ParsedItem]:
+        """Transform interface: parse ParsedItems and emit diff results."""
+        async for item in items:
+            if isinstance(item, ParsedItem):
+                diff_items = await self.parse(item)
+                for diff_item in diff_items:
+                    yield diff_item

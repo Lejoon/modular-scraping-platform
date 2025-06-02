@@ -401,3 +401,152 @@ The system will:
 **Database**: Uses SQLite with WAL (Write-Ahead Logging) mode for better concurrency, automatic schema migrations.
 
 **Monitoring**: Comprehensive logging at INFO level for monitoring data flow and changes.
+
+## Real-World Example: TCGPlayer Plugin
+
+The repository includes a second fully functional plugin that demonstrates API-driven data collection with database-driven fetching for Pokemon card pricing data from TCGPlayer:
+
+### What it does
+
+1. **Imports** Pokemon set reference data from CSV files with proper BOM handling
+2. **Fetches** price history from TCGPlayer API using product IDs from the database
+3. **Parses** complex JSON API responses with nested data structures
+4. **Persists** comprehensive pricing data with proper schema management
+5. **Demonstrates** database-driven pipeline architecture
+
+### Plugin Structure
+
+```
+plugins/tcgplayer/
+├── __init__.py           # Plugin exports  
+├── fetchers.py          # PokemonSetsCsvFetcher, TcgPlayerPriceHistoryFetcher
+├── parsers.py           # PokemonSetsParser, PriceHistoryParser  
+└── sinks.py             # TcgDatabaseSink - handles multiple table schemas
+```
+
+### How it works
+
+**CSV Import**: Reads Pokemon set data from semicolon-delimited CSV files, handles Unicode BOM, extracts product IDs.
+
+**Database-Driven API Calls**: Queries database for product IDs, then fetches price history from TCGPlayer API for each product.
+
+**Complex JSON Parsing**: Handles nested API responses with multiple SKUs and historical price buckets per product.
+
+**Multi-Table Persistence**: Manages separate schemas for Pokemon sets and price history data with proper relationships.
+
+### Pipeline Configuration
+
+```yaml
+pipelines:
+  # Pokemon Sets - CSV import pipeline
+  tcgplayer_pokemon_sets:
+    chain:
+      - class: tcgplayer.PokemonSetsCsvFetcher    # Reads CSV files with BOM handling
+        kwargs:
+          file_path: "development/tcg/pokemon_sets.csv"
+      - class: tcgplayer.PokemonSetsParser        # Parses semicolon-delimited CSV
+        kwargs: {}
+      - class: tcgplayer.TcgDatabaseSink          # Persists to pokemon_sets table
+        kwargs:
+          db_path: "tcg.db"
+
+  # Price History - API-driven pipeline using database product IDs
+  tcgplayer_price_history:
+    chain:
+      - class: tcgplayer.TcgPlayerPriceHistoryFetcher  # Reads product IDs from DB
+        kwargs:
+          db_path: "tcg.db"
+          api_key: "your-tcgplayer-api-key"
+      - class: tcgplayer.PriceHistoryParser             # Parses JSON API responses  
+        kwargs: {}
+      - class: tcgplayer.TcgDatabaseSink                # Persists to price_history table
+        kwargs:
+          db_path: "tcg.db"
+```
+
+### Data Flow
+
+```mermaid
+graph TD
+    A[CSV File] --> B[PokemonSetsCsvFetcher]
+    B --> C[PokemonSetsParser]  
+    C --> D[TcgDatabaseSink]
+    D --> E[pokemon_sets table]
+    
+    E --> F[TcgPlayerPriceHistoryFetcher]
+    F --> G[TCGPlayer API]
+    G --> H[PriceHistoryParser]
+    H --> I[TcgDatabaseSink]
+    I --> J[price_history table]
+```
+
+### Database Schema
+
+**`pokemon_sets`**: Reference data for Pokemon sets
+- `set_name` (Primary Key): Pokemon set name
+- `release_date`: Set release date  
+- `booster_product_id`: TCGPlayer booster product ID
+- `booster_box_product_id`: TCGPlayer booster box product ID
+- `group_id`: TCGPlayer group ID
+- `created_at`, `updated_at`: Timestamps
+
+**`price_history`**: Historical pricing data
+- `sku_id`, `bucket_start_date` (Composite Primary Key)  
+- `product_id`: Reference to TCGPlayer product
+- `variant`, `language`, `condition`: Product variant details
+- `market_price`: Market price for the time period
+- `quantity_sold`: Number of units sold
+- `low_sale_price`, `high_sale_price`: Price range
+- `created_at`, `updated_at`: Timestamps
+
+### Running the TCGPlayer Example
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Run Pokemon sets import pipeline
+python run_pipeline.py tcg_test.yml tcgplayer_pokemon_sets
+
+# Run price history pipeline (requires API key)
+python run_pipeline.py tcg_test.yml tcgplayer_price_history
+
+# Check the generated database  
+sqlite3 tcg.db
+.tables
+SELECT COUNT(*) FROM pokemon_sets;
+SELECT COUNT(*) FROM price_history;
+```
+
+### Results
+
+The TCGPlayer plugin successfully demonstrates:
+- **CSV Processing**: Imported 20 Pokemon sets with 40 unique product IDs
+- **API Integration**: Fetched 2,080+ price history records (52 records per product)
+- **Database Relationships**: Used pokemon_sets data to drive price_history API calls
+- **Data Quality**: Historical price data showing market trends over time
+- **Schema Management**: Automatic table creation and column management
+
+### Key Features Demonstrated
+
+**BOM Handling**: Proper Unicode handling for CSV files with `decode('utf-8-sig')`
+
+**Database-Driven Fetching**: SQL queries to get product IDs dynamically rather than hardcoded values
+
+**Complex API Parsing**: Nested JSON structure with `result` arrays containing `buckets` of historical data
+
+**Multi-Table Sinks**: Single sink class managing different table schemas based on ParsedItem topics
+
+**Error Resilience**: Graceful handling of API rate limits and malformed data
+
+### Technical Highlights
+
+**Memory Efficiency**: Processes one product at a time rather than loading all data into memory
+
+**API Rate Limiting**: Respects TCGPlayer API limits with proper error handling
+
+**Data Validation**: Type conversion and null handling for robust data quality
+
+**Schema Evolution**: Automatic column addition (e.g., `updated_at` column) for schema changes
+
+This plugin showcases how the framework handles real-world complexity including API integration, database relationships, and multi-stage data processing pipelines.

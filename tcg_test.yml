@@ -1,0 +1,22 @@
+# Test configuration for TCGPlayer pipelines only
+pipelines:
+  - name: tcgplayer_pokemon_sets
+    chain:
+      - class: tcgplayer.PokemonSetsCsvFetcher
+        kwargs:
+          csv_path: "development/tcg/pokemon_sets.csv"
+      - class: tcgplayer.PokemonSetsParser
+      - class: tcgplayer.TcgDatabaseSink
+        kwargs:
+          db_path: "tcg.db"
+
+  - name: tcgplayer_price_history
+    chain:
+      - class: tcgplayer.TcgPlayerPriceHistoryFetcher
+        kwargs:
+          db_path: "tcg.db"
+          delay_seconds: 2.0
+      - class: tcgplayer.PriceHistoryParser
+      - class: tcgplayer.TcgDatabaseSink
+        kwargs:
+          db_path: "tcg.db"

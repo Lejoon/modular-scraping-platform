@@ -27,14 +27,27 @@ pipelines:
         kwargs:
           db_path: "fi_shortinterest.db"
 
-  # Example: Test pipeline for future use
-  # test_pipeline:
-  #   chain:
-  #     - class: test_plugin.TestFetcher
-  #       kwargs:
-  #         url: "https://example.com/api"
-  #     - class: test_plugin.TestParser
-  #       kwargs: {}
-  #     - class: test_plugin.TestSink
-  #       kwargs:
-  #         output_file: "test_output.json"
+  # TCGPlayer - Pokemon sets CSV data pipeline
+  tcgplayer_pokemon_sets:
+    chain:
+      - class: tcgplayer.PokemonSetsCsvFetcher
+        kwargs:
+          csv_path: "development/tcg/pokemon_sets.csv"
+      - class: tcgplayer.PokemonSetsParser
+        kwargs: {}
+      - class: tcgplayer.TcgDatabaseSink
+        kwargs:
+          db_path: "tcg.db"
+
+  # TCGPlayer - Price history data pipeline (example with limited product IDs)
+  tcgplayer_price_history:
+    chain:
+      - class: tcgplayer.TcgPlayerPriceHistoryFetcher
+        kwargs:
+          product_ids: [512822, 512821]  # Example: SV Paradox Rift booster and box
+          delay_seconds: 1.0
+      - class: tcgplayer.PriceHistoryParser
+        kwargs: {}
+      - class: tcgplayer.TcgDatabaseSink
+        kwargs:
+          db_path: "tcg.db"

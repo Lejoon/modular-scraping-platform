@@ -8,7 +8,14 @@ from load_groups import save_price_history_data
 # example contents
 
 '''
-{"totalItems": 16, "success": true, "errors": [], "results": [{"groupId": 24279, "name": "Legends of the Force", "abbreviation": "LOF", "isSupplemental": false, "publishedOn": "2025-07-11T00:00:00", "modifiedOn": "2025-05-15T19:06:41.827", "categoryId": 79}, {"groupId": 23956, "name": "Jump to Lightspeed", "abbreviation": "JTL", "isSupplemental": false, "publishedOn": "2025-03-14T00:00:00", "modifiedOn": "2025-04-08T14:04:54.053", "categoryId": 79}, {"groupId": 24171, "name": "Jump to Lightspeed - Weekly Play Promos", "abbreviation": "JTL-WPP", "isSupplemental": false, "publishedOn": "2025-03-14T00:00:00", "modifiedOn": "2025-03-17T18:17:34.873", "categoryId": 79}, {"groupId": 23597, "name": "Twilight of the Republic", "abbreviation": "TWI", "isSupplemental": false, "publishedOn": "2024-11-08T00:00:00", "modifiedOn": "2025-01-23T21:26:38.15", "categoryId": 79}, {"groupId": 23820, "name": "Twilight of the Republic: Weekly Play Promos", "abbreviation": "TWI-WPP", "isSupplemental": false, "publishedOn": "2024-11-08T00:00:00", "modifiedOn": "2024-12-10T16:00:15.833", "categoryId": 79}, {"groupId": 23572, "name": "2024 Convention Exclusive", "abbreviation": "CE2024", "isSupplemental": false, "publishedOn": "2024-07-25T00:00:00", "modifiedOn": "2025-01-20T15:59:34.78", "categoryId": 79}, {"groupId": 23488, "name": "Shadows of the Galaxy", "abbreviation": "SHD", "isSupplemental": false, "publishedOn": "2024-07-12T00:00:00", "modifiedOn": "2025-03-17T16:48:34.71", "categoryId": 79}, {"groupId": 23555, "name": "Shadows of the Galaxy: Weekly Play Promos", "abbreviation": "SHD-WPP", "isSupplemental": false, "publishedOn": "2024-07-04T00:00:00", "modifiedOn": "2024-10-11T15:39:38.523", "categoryId": 79}, {"groupId": 23454, "name": "Event Exclusive Promos", "abbreviation": "EEP", "isSupplemental": false, "publishedOn": "2024-03-08T00:00:00", "modifiedOn": "2025-05-16T18:16:54.43", "categoryId": 79}, {"groupId": 23453, "name": "Judge Promos", "abbreviation": "JDG", "isSupplemental": false, "publishedOn": "2024-03-08T00:00:00", "modifiedOn": "2025-05-16T18:31:53.06", "categoryId": 79}, {"groupId": 23455, "name": "Organized Play Promos", "abbreviation": "OPP", "isSupplemental": false, "publishedOn": "2024-03-08T00:00:00", "modifiedOn": "2025-05-21T20:41:58.38", "categoryId": 79}, {"groupId": 23405, "name": "Spark of Rebellion", "abbreviation": "SOR", "isSupplemental": false, "publishedOn": "2024-03-08T00:00:00", "modifiedOn": "2025-02-19T13:55:35.28", "categoryId": 79}, {"groupId": 23451, "name": "Spark of Rebellion: Weekly Play Promos", "abbreviation": "SOR-WPP", "isSupplemental": false, "publishedOn": "2024-03-08T00:00:00", "modifiedOn": "2024-07-12T14:31:13.46", "categoryId": 79}, {"groupId": 23452, "name": "Prerelease Promos", "abbreviation": "PRE", "isSupplemental": false, "publishedOn": "2024-03-01T00:00:00", "modifiedOn": "2024-11-15T14:13:29.703", "categoryId": 79}, {"groupId": 23406, "name": "GenCon 2023 Promos", "abbreviation": "", "isSupplemental": false, "publishedOn": "2023-08-03T00:00:00", "modifiedOn": "2024-01-18T16:13:13.217", "categoryId": 79}, {"groupId": 24272, "name": "Gamegenic Promos", "abbreviation": "", "isSupplemental": false, "publishedOn": "2025-06-01T20:00:06.2193042Z", "modifiedOn": "2025-04-04T19:57:18.827", "categoryId": 79}]}
+{"totalItems": 16, "success": true, "errors": [], "results": [{"groupId": 24279, "name": "Legends of the Force", "abbreviation": "LOF", "isSupplemental": false, "publishedOn": "2025-07-11T00:00:00", "modifiedOn": "2025-05-15T19:06:41.827", "categoryId": 79}, {"groupId": 23956, "name": "Jump to Lightspeed", "abbreviation": "JTL", "isSupplemental": false, "publishedOn": "2025-03-14            print("Analysis commands:")
+            print("  analyze <product_id> [window_days] - Detailed analysis of a product")
+            print("  export <product_id> [filename]     - Export time series data to CSV")
+            print("  sets                              - List all available Pokemon sets")
+            print("  recent [days]                     - Show recent price activity")
+            print("  demo                              - Run analysis demo")
+            print("  volume_csv                        - Export volume data to CSV")
+            print("  visualize                         - Create volume charts")00", "modifiedOn": "2025-04-08T14:04:54.053", "categoryId": 79}, {"groupId": 24171, "name": "Jump to Lightspeed - Weekly Play Promos", "abbreviation": "JTL-WPP", "isSupplemental": false, "publishedOn": "2025-03-14T00:00:00", "modifiedOn": "2025-03-17T18:17:34.873", "categoryId": 79}, {"groupId": 23597, "name": "Twilight of the Republic", "abbreviation": "TWI", "isSupplemental": false, "publishedOn": "2024-11-08T00:00:00", "modifiedOn": "2025-01-23T21:26:38.15", "categoryId": 79}, {"groupId": 23820, "name": "Twilight of the Republic: Weekly Play Promos", "abbreviation": "TWI-WPP", "isSupplemental": false, "publishedOn": "2024-11-08T00:00:00", "modifiedOn": "2024-12-10T16:00:15.833", "categoryId": 79}, {"groupId": 23572, "name": "2024 Convention Exclusive", "abbreviation": "CE2024", "isSupplemental": false, "publishedOn": "2024-07-25T00:00:00", "modifiedOn": "2025-01-20T15:59:34.78", "categoryId": 79}, {"groupId": 23488, "name": "Shadows of the Galaxy", "abbreviation": "SHD", "isSupplemental": false, "publishedOn": "2024-07-12T00:00:00", "modifiedOn": "2025-03-17T16:48:34.71", "categoryId": 79}, {"groupId": 23555, "name": "Shadows of the Galaxy: Weekly Play Promos", "abbreviation": "SHD-WPP", "isSupplemental": false, "publishedOn": "2024-07-04T00:00:00", "modifiedOn": "2024-10-11T15:39:38.523", "categoryId": 79}, {"groupId": 23454, "name": "Event Exclusive Promos", "abbreviation": "EEP", "isSupplemental": false, "publishedOn": "2024-03-08T00:00:00", "modifiedOn": "2025-05-16T18:16:54.43", "categoryId": 79}, {"groupId": 23453, "name": "Judge Promos", "abbreviation": "JDG", "isSupplemental": false, "publishedOn": "2024-03-08T00:00:00", "modifiedOn": "2025-05-16T18:31:53.06", "categoryId": 79}, {"groupId": 23455, "name": "Organized Play Promos", "abbreviation": "OPP", "isSupplemental": false, "publishedOn": "2024-03-08T00:00:00", "modifiedOn": "2025-05-21T20:41:58.38", "categoryId": 79}, {"groupId": 23405, "name": "Spark of Rebellion", "abbreviation": "SOR", "isSupplemental": false, "publishedOn": "2024-03-08T00:00:00", "modifiedOn": "2025-02-19T13:55:35.28", "categoryId": 79}, {"groupId": 23451, "name": "Spark of Rebellion: Weekly Play Promos", "abbreviation": "SOR-WPP", "isSupplemental": false, "publishedOn": "2024-03-08T00:00:00", "modifiedOn": "2024-07-12T14:31:13.46", "categoryId": 79}, {"groupId": 23452, "name": "Prerelease Promos", "abbreviation": "PRE", "isSupplemental": false, "publishedOn": "2024-03-01T00:00:00", "modifiedOn": "2024-11-15T14:13:29.703", "categoryId": 79}, {"groupId": 23406, "name": "GenCon 2023 Promos", "abbreviation": "", "isSupplemental": false, "publishedOn": "2023-08-03T00:00:00", "modifiedOn": "2024-01-18T16:13:13.217", "categoryId": 79}, {"groupId": 24272, "name": "Gamegenic Promos", "abbreviation": "", "isSupplemental": false, "publishedOn": "2025-06-01T20:00:06.2193042Z", "modifiedOn": "2025-04-04T19:57:18.827", "categoryId": 79}]}
 '''
 
 # Returns the latest sales data for a specific product from TCGPlayer API.
@@ -480,16 +487,181 @@ def query_price_history_example():
 
 
 if __name__ == "__main__":
-    # Uncomment the line below to test latest sales API
-    # main()
+    import sys
     
-    # Uncomment the line below to test price history saving with example data
-    test_price_history_api()
-    
-    # Example of how to fetch actual price history data (uncomment to use)
-    # from load_groups import fetch_and_save_price_history
-    # fetch_and_save_price_history(624679)  # Booster box product ID from Pokemon sets
-
-    # Query and display the price history example
-    query_price_history_example()
+    if len(sys.argv) > 1:
+        command = sys.argv[1]
+        
+        if command == "summary":
+            from load_groups import get_pokemon_sets_summary
+            get_pokemon_sets_summary()
+            
+        elif command == "trends":
+            from load_groups import analyze_price_trends
+            product_id = int(sys.argv[2]) if len(sys.argv) > 2 else None
+            days = int(sys.argv[3]) if len(sys.argv) > 3 else 30
+            analyze_price_trends(product_id, days)
+            
+        elif command == "fetch_one":
+            if len(sys.argv) < 3:
+                print("Usage: python testing.py fetch_one <product_id>")
+                sys.exit(1)
+            from load_groups import fetch_and_save_price_history
+            product_id = int(sys.argv[2])
+            fetch_and_save_price_history(product_id)
+            
+        elif command == "fetch_all":
+            from load_groups import fetch_all_pokemon_price_history
+            fetch_all_pokemon_price_history()
+            
+        elif command == "test_api":
+            test_price_history_api()
+            
+        elif command == "query":
+            query_price_history_example()
+            
+        elif command == "latest_sales":
+            main()
+            
+        elif command == "analyze":
+            if len(sys.argv) < 3:
+                print("Usage: python testing.py analyze <product_id> [window_days]")
+                sys.exit(1)
+            import analysis
+            product_id = int(sys.argv[2])
+            window_days = int(sys.argv[3]) if len(sys.argv) > 3 else 7
+            
+            print(f"=== Analysis for Product {product_id} ===")
+            
+            # Get time series data
+            time_series = analysis.get_time_series_by_product_id(product_id)
+            print(f"Data points: {len(time_series)}")
+            
+            if time_series:
+                print(f"Date range: {time_series[0].date} to {time_series[-1].date}")
+                print(f"Latest price: ${time_series[-1].market_price}")
+                print(f"Latest volume: {time_series[-1].quantity_sold} sold")
+                
+                # Price summary
+                summary = analysis.get_price_summary_by_product(product_id)
+                print(f"\nPrice Summary:")
+                print(f"  Min: ${summary['market_price']['min']:.2f}")
+                print(f"  Max: ${summary['market_price']['max']:.2f}")
+                print(f"  Avg: ${summary['market_price']['avg']:.2f}")
+                print(f"  Total volume: {summary['sales_volume']['total']:,}")
+                
+                # Trend analysis
+                trends = analysis.analyze_price_trends(product_id, window_days)
+                if 'error' not in trends:
+                    print(f"\nTrend Analysis ({window_days}-day window):")
+                    print(f"  Moving avg: ${trends['moving_avg_price']:.2f}")
+                    print(f"  Recent trend: {trends['recent_trend']['direction']} (${trends['recent_trend']['change']:.2f})")
+                    print(f"  Overall trend: {trends['overall_trend']['direction']} (${trends['overall_trend']['change']:.2f})")
+                else:
+                    print(f"\nTrend Analysis: {trends['error']}")
+            else:
+                print("No data found for this product ID")
+                
+        elif command == "export":
+            if len(sys.argv) < 3:
+                print("Usage: python testing.py export <product_id> [filename]")
+                sys.exit(1)
+            import analysis
+            product_id = int(sys.argv[2])
+            filename = sys.argv[3] if len(sys.argv) > 3 else f"product_{product_id}_data.csv"
+            
+            time_series = analysis.get_time_series_by_product_id(product_id)
+            if time_series:
+                analysis.export_to_csv(time_series, filename)
+            else:
+                print(f"No data found for product {product_id}")
+                
+        elif command == "sets":
+            import analysis
+            sets = analysis.get_all_available_sets()
+            print("=== Available Pokemon Sets ===")
+            for i, set_info in enumerate(sets, 1):
+                print(f"{i:2d}. {set_info['set_name']}")
+                if set_info['booster_product_id']:
+                    print(f"     Booster Pack ID: {set_info['booster_product_id']} (Data: {set_info['has_booster_data']})")
+                if set_info['booster_box_product_id']:
+                    print(f"     Booster Box ID: {set_info['booster_box_product_id']} (Data: {set_info['has_box_data']})")
+                print(f"     Release: {set_info['release_date']}")
+                print()
+                
+        elif command == "recent":
+            import analysis
+            days = int(sys.argv[2]) if len(sys.argv) > 2 else 30
+            activity = analysis.get_recent_activity(days)
+            print(f"=== Recent Activity (Last {days} days) ===")
+            
+            if activity:
+                for item in activity[:20]:  # Show first 20
+                    print(f"{item['date']}: {item['set_name']} - ${item['market_price']:.2f} ({item['quantity_sold']} sold)")
+            else:
+                print("No recent activity found")
+                
+        elif command == "demo":
+            import analysis
+            analysis.demo_analysis()
+            
+        elif command == "visualize":
+            import subprocess
+            result = subprocess.run([sys.executable, "visualize_volume.py"], 
+                                  capture_output=True, text=True)
+            if result.returncode == 0:
+                print(result.stdout)
+            else:
+                print("Error running visualization:")
+                print(result.stderr)
+            
+        elif command == "volume":
+            import analysis
+            filename = sys.argv[2] if len(sys.argv) > 2 else "pokemon_sets_volume_sold.csv"
+            include_product_type = "--include-type" in sys.argv
+            
+            print("Generating volume sold data for all Pokemon sets...")
+            analysis.export_volume_sold_csv(filename, include_product_type)
+            
+        elif command == "volume_summary":
+            import analysis
+            summary = analysis.get_volume_summary_by_set()
+            
+            print("=== Volume Sold Summary by Pokemon Set ===")
+            print(f"{'Set Name':<40} {'Total Volume ($)':<15} {'Qty Sold':<10} {'Avg Price':<10} {'Data Points':<12}")
+            print("-" * 90)
+            
+            for set_data in summary:
+                print(f"{set_data['set_name']:<40} ${set_data['total_volume']:>13,.2f} {set_data['total_quantity']:>9,} ${set_data['avg_price']:>8.2f} {set_data['data_points']:>11}")
+            
+            print(f"\nTotal sets with sales data: {len(summary)}")
+            if summary:
+                total_volume = sum(s['total_volume'] for s in summary)
+                total_quantity = sum(s['total_quantity'] for s in summary)
+                print(f"Overall total volume: ${total_volume:,.2f}")
+                print(f"Overall total quantity: {total_quantity:,} units")
+            
+        else:
+            print("Available commands:")
+            print("  summary              - Show Pokemon sets summary")
+            print("  trends [product_id] [days] - Show price trends")
+            print("  fetch_one <product_id> - Fetch price history for one product")
+            print("  fetch_all            - Fetch price history for all Pokemon sets")
+            print("  test_api             - Test price history API with sample data")
+            print("  query                - Query and display price history example")
+            print("  latest_sales         - Test latest sales API")
+            print()
+            print("Analysis commands:")
+            print("  analyze <product_id> [window_days] - Detailed analysis of a product")
+            print("  export <product_id> [filename]     - Export time series data to CSV")
+            print("  sets                              - List all available Pokemon sets")
+            print("  recent [days]                     - Show recent price activity")
+            print("  demo                              - Run analysis demo")
+            print("  volume [filename]                 - Export volume sold data for all sets to CSV")
+            print("  volume_summary                    - Show volume sold summary by set")
+            print("                                      Use --include-type to include product type in volume export")
+    else:
+        # Default behavior - test price history
+        test_price_history_api()
+        query_price_history_example()
 

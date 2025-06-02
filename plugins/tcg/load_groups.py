@@ -416,5 +416,80 @@ def fetch_all_pokemon_price_history(delay_seconds=2, skip_existing=True):
     # Show final summary
     get_pokemon_sets_summary()
 
+def analyze_price_trends(product_id=None, days=30):
+    """
+    Analyze price trends for Pokemon products.
+    
+    Args:
+        product_id: Specific product ID to analyze, or None for all products
+        days: Number of recent days to analyze
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    if product_id:
+        query = """
+            SELECT 
+                ps.set_name,
+                ph.product_id,
+                CASE 
+                    WHEN ph.product_id = ps.booster_product_id THEN 'Booster'
+                    WHEN ph.product_id = ps.booster_box_product_id THEN 'Booster Box'
+                    ELSE 'Unknown'
+                END as product_type,
+                ph.market_price,
+                ph.quantity_sold,
+                ph.bucket_start_date,
+                ph.condition
+            FROM price_history ph
+            JOIN pokemon_sets ps ON (ph.product_id = ps.booster_product_id OR ph.product_id = ps.booster_box_product_id)
+            WHERE ph.product_id = ? AND DATE(ph.bucket_start_date) >= DATE('now', '-' || ? || ' days')
+            ORDER BY ph.bucket_start_date DESC
+        """
+        c.execute(query, (product_id, days))
+    else:
+        query = """
+            SELECT 
+                ps.set_name,
+                ph.product_id,
+                CASE 
+                    WHEN ph.product_id = ps.booster_product_id THEN 'Booster'
+                    WHEN ph.product_id = ps.booster_box_product_id THEN 'Booster Box'
+                    ELSE 'Unknown'
+                END as product_type,
+                AVG(ph.market_price) as avg_price,
+                SUM(ph.quantity_sold) as total_sold,
+                MIN(ph.bucket_start_date) as first_date,
+                MAX(ph.bucket_start_date) as last_date,
+                COUNT(*) as data_points
+            FROM price_history ph
+            JOIN pokemon_sets ps ON (ph.product_id = ps.booster_product_id OR ph.product_id = ps.booster_box_product_id)
+            WHERE DATE(ph.bucket_start_date) >= DATE('now', '-' || ? || ' days')
+            GROUP BY ps.set_name, ph.product_id, product_type
+            ORDER BY ps.set_name, product_type
+        """
+        c.execute(query, (days,))
+    
+    results = c.fetchall()
+    conn.close()
+    
+    if product_id:
+        print(f"Price History for Product {product_id} (Last {days} days):")
+        print("=" * 100)
+        print(f"{'Set':<35} {'Type':<12} {'Price':<8} {'Sold':<6} {'Date':<12} {'Condition':<10}")
+        print("-" * 100)
+        for row in results:
+            set_name, pid, ptype, price, sold, date, condition = row
+            print(f"{set_name[:34]:<35} {ptype:<12} ${price:<7.2f} {sold:<6} {date:<12} {condition:<10}")
+    else:
+        print(f"Price Summary (Last {days} days):")
+        print("=" * 120)
+        print(f"{'Set':<35} {'Type':<12} {'Avg Price':<10} {'Total Sold':<12} {'Data Points':<12} {'Date Range':<20}")
+        print("-" * 120)
+        for row in results:
+            set_name, pid, ptype, avg_price, total_sold, first_date, last_date, data_points = row
+            date_range = f"{first_date} to {last_date}"
+            print(f"{set_name[:34]:<35} {ptype:<12} ${avg_price:<9.2f} {total_sold:<12} {data_points:<12} {date_range:<20}")
+
 if __name__ == "__main__":
     load_all()

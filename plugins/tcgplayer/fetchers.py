@@ -43,7 +43,7 @@ class PokemonSetsCsvFetcher(Fetcher):
 class TcgPlayerPriceHistoryFetcher(Fetcher):
     """Fetch price history data from TCGPlayer API for multiple products."""
     
-    def __init__(self, db_path: str = "tcg.db", product_ids: Optional[List[int]] = None, delay_seconds: float = 1.0):
+    def __init__(self, db_path: str = "tcg.db", product_ids: Optional[List[int]] = None, delay_seconds: float = 1.0, **kwargs):
         """
         Initialize with database path to read product IDs, or explicit product IDs.
         
@@ -51,11 +51,12 @@ class TcgPlayerPriceHistoryFetcher(Fetcher):
             db_path: Path to SQLite database to read product IDs from
             product_ids: Optional list of explicit product IDs (overrides database lookup)
             delay_seconds: Delay between API requests for rate limiting
+            **kwargs: Additional arguments passed to HttpClient
         """
         self.db_path = db_path
         self.explicit_product_ids = product_ids
         self.delay_seconds = delay_seconds
-        self.http_client = None
+        self.http = HttpClient(**kwargs)
         
         # Default headers for TCGPlayer API
         self.headers = {
@@ -101,36 +102,37 @@ class TcgPlayerPriceHistoryFetcher(Fetcher):
     
     async def fetch(self) -> AsyncIterator[RawItem]:
         """Fetch price history data for all products."""
-        if self.http_client is None:
-            self.http_client = HttpClient()
-        
-        product_ids = self._get_product_ids()
-        
-        if not product_ids:
-            print("No product IDs found to fetch price history for")
-            return
-        
-        print(f"Fetching price history for {len(product_ids)} products")
-        
-        for i, product_id in enumerate(product_ids):
-            try:
-                print(f"Fetching price history for product {product_id} ({i+1}/{len(product_ids)})")
-                
-                # TCGPlayer API endpoint for price history
-                url = f"https://infinite-api.tcgplayer.com/price/history/{product_id}/detailed?range=annual"
-                
-                # Fetch JSON data as bytes
-                response_bytes = await self.http_client.get_bytes(url, headers=self.headers)
-                
-                yield RawItem(
-                    source=f"tcgplayer.price_history.{product_id}",
-                    payload=response_bytes
-                )
-                
-                # Rate limiting - wait between requests
-                if i < len(product_ids) - 1:  # Don't sleep after the last request
-                    await asyncio.sleep(self.delay_seconds)
+        try:
+            product_ids = self._get_product_ids()
+            
+            if not product_ids:
+                print("No product IDs found to fetch price history for")
+                return
+            
+            print(f"Fetching price history for {len(product_ids)} products")
+            
+            for i, product_id in enumerate(product_ids):
+                try:
+                    print(f"Fetching price history for product {product_id} ({i+1}/{len(product_ids)})")
                     
-            except Exception as e:
-                print(f"Error fetching price history for product {product_id}: {e}")
-                continue
+                    # TCGPlayer API endpoint for price history
+                    url = f"https://infinite-api.tcgplayer.com/price/history/{product_id}/detailed?range=annual"
+                    
+                    # Fetch JSON data as text, then encode to bytes
+                    response_text = await self.http.get_text(url, headers=self.headers)
+                    response_bytes = response_text.encode('utf-8')
+                    
+                    yield RawItem(
+                        source=f"tcgplayer.price_history.{product_id}",
+                        payload=response_bytes
+                    )
+                    
+                    # Rate limiting - wait between requests
+                    if i < len(product_ids) - 1:  # Don't sleep after the last request
+                        await asyncio.sleep(self.delay_seconds)
+                        
+                except Exception as e:
+                    print(f"Error fetching price history for product {product_id}: {e}")
+                    continue
+        finally:
+            await self.http.close()

@@ -30,19 +30,21 @@ class DiffParser(Transform):
     async def parse(self, item: ParsedItem) -> List[ParsedItem]:
         """
         Entry point for core framework: receives ParsedItem from upstream parsers,
-        compares to DB state, and returns either:
-          - [ParsedItem(topic="fi.short.aggregate.diff", …)] or
-          - [ParsedItem(topic="fi.short.positions.diff", …)]
-        when there’s a change, or
-          - [] if nothing changed, or
-          - [item] for topics we don’t handle.
+        compares to DB state, and returns:
+          - [original_item, diff_item] when there's a change
+          - [original_item] when no change detected but item should be stored
+          - [item] for topics we don't handle.
         """
         await self._ensure_initialized()
         
         if item.topic == "fi.short.aggregate":
-            return await self._diff_aggregate(item)
+            diff_items = await self._diff_aggregate(item)
+            # Always return the original item plus any diff items
+            return [item] + diff_items
         elif item.topic == "fi.short.positions":
-            return await self._diff_positions(item)
+            diff_items = await self._diff_positions(item)
+            # Always return the original item plus any diff items
+            return [item] + diff_items
         else:
             # unknown topics just pass through
             return [item]

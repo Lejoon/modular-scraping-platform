@@ -200,10 +200,11 @@ class DiffParser(Transform):
             agg_rows = await self.db.fetch_all(
                 "SELECT lei, company_name, position_percent, latest_position_date FROM short_positions"
             )
-            
             for row in agg_rows:
                 lei = row["lei"]
-                if ("aggregate", lei) not in self._seen_keys:
+                seen_key = ("aggregate", lei)
+                
+                if not seen_key in self._seen_keys:
                     logger.info(f"Aggregate position removed: {lei} (was {row['position_percent']:.3f}%)")
                     yield ParsedItem(
                         topic="fi.short.aggregate.diff",

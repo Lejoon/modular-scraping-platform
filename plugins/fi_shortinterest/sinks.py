@@ -181,7 +181,6 @@ class DatabaseSink(Sink):
             else:
                 # Normal upsert operation
                 await self.db.upsert(table, data, pk_columns)
-                logger.info(f"Upserted data to {table}: columns={list(data.keys())}")
         except Exception as e:
             logger.error(f"Failed to handle item for {table}: {e}")
 
@@ -221,6 +220,8 @@ class DatabaseSink(Sink):
         # Delete from main table
         delete_query = f"DELETE FROM {main_table} WHERE {where_clause}"
         await self.db.execute(delete_query, where_params)
+        # Ensure the deletion is committed to the database
+        await self.db._connection.commit()
         logger.info(f"Deleted removed entity from {main_table}: {where_params}")
 
     async def close(self) -> None:

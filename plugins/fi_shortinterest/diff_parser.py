@@ -1,9 +1,7 @@
-"""
-Diff parser for detecting changes in scraped data.
-"""
 
 import logging
-from typing import List, Dict, Any, AsyncIterator
+from datetime import datetime
+from typing import List, Dict, Any, AsyncIterator, Set
 
 from core.interfaces import Transform
 from core.models import ParsedItem
@@ -20,6 +18,7 @@ class DiffParser(Transform):
         # file‐backed DB is still used
         self.db = Database(kwargs.get("db_path", "scraper.db"))
         self._initialized = False
+        self._seen_keys: Set[tuple] = set()  # Track keys seen in current batch
 
     async def _ensure_initialized(self):
         """Ensure database connection is initialized."""
@@ -38,10 +37,22 @@ class DiffParser(Transform):
         await self._ensure_initialized()
         
         if item.topic == "fi.short.aggregate":
+            # Track this key as seen
+            lei = item.content.get("lei")
+            if lei:
+                self._seen_keys.add(("aggregate", lei))
+            
             diff_items = await self._diff_aggregate(item)
             # Always return the original item plus any diff items
             return [item] + diff_items
         elif item.topic == "fi.short.positions":
+            # Track this key as seen
+            entity_name = item.content.get("entity_name", "")
+            issuer_name = item.content.get("issuer_name", "")
+            isin = item.content.get("isin", "")
+            if all([entity_name, issuer_name, isin]):
+                self._seen_keys.add(("positions", entity_name, issuer_name, isin))
+            
             diff_items = await self._diff_positions(item)
             # Always return the original item plus any diff items
             return [item] + diff_items
@@ -162,8 +173,80 @@ class DiffParser(Transform):
 
     async def __call__(self, items: AsyncIterator[Any]) -> AsyncIterator[ParsedItem]:
         """Transform interface: parse ParsedItems and emit diff results."""
+        # Reset seen keys for this batch
+        self._seen_keys.clear()
+        
+        # Normal per-row diff processing
         async for item in items:
             if isinstance(item, ParsedItem):
                 diff_items = await self.parse(item)
                 for diff_item in diff_items:
                     yield diff_item
+        
+        # Removal detection at end of batch
+        async for removal_item in self._emit_removals():
+            yield removal_item
+
+    async def _emit_removals(self) -> AsyncIterator[ParsedItem]:
+        """Emit diff events for entities that were in DB but not in current batch."""
+        await self._ensure_initialized()
+        
+        # Determine which data types were processed in this batch
+        processed_aggregates = any(key[0] == "aggregate" for key in self._seen_keys)
+        processed_positions = any(key[0] == "positions" for key in self._seen_keys)
+        
+        # Only check for removed aggregate positions if we processed aggregate data in this batch
+        if processed_aggregates:
+            agg_rows = await self.db.fetch_all(
+                "SELECT lei, company_name, position_percent, latest_position_date FROM short_positions"
+            )
+            
+            for row in agg_rows:
+                lei = row["lei"]
+                if ("aggregate", lei) not in self._seen_keys:
+                    logger.info(f"Aggregate position removed: {lei} (was {row['position_percent']:.3f}%)")
+                    yield ParsedItem(
+                        topic="fi.short.aggregate.diff",
+                        content={
+                            "lei": lei,
+                            "company_name": row["company_name"],
+                            "position_percent": 0.0,
+                            "latest_position_date": row["latest_position_date"],
+                            "event_timestamp": datetime.utcnow().isoformat(),
+                            "old_pct": float(row["position_percent"]),
+                            "new_pct": 0.0,
+                            "previous_percent": float(row["position_percent"]),
+                            "percent_change": -float(row["position_percent"]),
+                            "removal_detected": True
+                        },
+                        discovered_at=datetime.utcnow()
+                    )
+        
+        # Only check for removed individual positions if we processed position data in this batch  
+        if processed_positions:
+            pos_rows = await self.db.fetch_all(
+                "SELECT entity_name, issuer_name, isin, position_percent, position_date, comment FROM position_holders"
+            )
+            
+            for row in pos_rows:
+                key = ("positions", row["entity_name"], row["issuer_name"], row["isin"])
+                if key not in self._seen_keys:
+                    logger.info(f"Position removed: {row['entity_name']} -> {row['issuer_name']} (was {row['position_percent']:.3f}%)")
+                    yield ParsedItem(
+                        topic="fi.short.positions.diff",
+                        content={
+                            "entity_name": row["entity_name"],
+                            "issuer_name": row["issuer_name"],
+                            "isin": row["isin"],
+                            "position_percent": 0.0,
+                            "position_date": row["position_date"],
+                            "comment": row["comment"] if "comment" in row.keys() else "",
+                            "event_timestamp": datetime.utcnow().isoformat(),
+                            "old_pct": float(row["position_percent"]),
+                            "new_pct": 0.0,
+                            "previous_percent": float(row["position_percent"]),
+                            "percent_change": -float(row["position_percent"]),
+                            "removal_detected": True
+                        },
+                        discovered_at=datetime.utcnow()
+                    )

@@ -1,0 +1,46 @@
+# Enhanced pipeline configuration that detects position removals
+pipelines:
+  # Enhanced FI Short Interest - Aggregate data with removal detection
+  fi_shortinterest_agg_enhanced:
+    name: "FI Short Interest Aggregate Enhanced"
+    chain:
+      - class: fi_shortinterest.FiFetcher
+        kwargs: {}
+      - class: fi_shortinterest.FiAggParser  
+        kwargs: {}
+      - class: fi_shortinterest.EnhancedDiffParser  # NEW: Enhanced diff parser
+        kwargs:
+          db_path: "fi_shortinterest.db"
+      - class: fi_shortinterest.DatabaseSink
+        kwargs:
+          db_path: "fi_shortinterest.db"
+
+  # Enhanced FI Short Interest - Position data with removal detection  
+  fi_shortinterest_pos_enhanced:
+    name: "FI Short Interest Positions Enhanced"
+    chain:
+      - class: fi_shortinterest.FiFetcher
+        kwargs: {}
+      - class: fi_shortinterest.FiActParser
+        kwargs: {}
+      - class: fi_shortinterest.EnhancedDiffParser  # NEW: Enhanced diff parser
+        kwargs:
+          db_path: "fi_shortinterest.db"
+      - class: fi_shortinterest.DatabaseSink
+        kwargs:
+          db_path: "fi_shortinterest.db"
+
+  # Original pipelines (for comparison/fallback)
+  fi_shortinterest_agg_original:
+    name: "FI Short Interest Aggregate Original"
+    chain:
+      - class: fi_shortinterest.FiFetcher
+        kwargs: {}
+      - class: fi_shortinterest.FiAggParser
+        kwargs: {}
+      - class: fi_shortinterest.DiffParser  # Original diff parser
+        kwargs:
+          db_path: "fi_shortinterest_original.db"
+      - class: fi_shortinterest.DatabaseSink
+        kwargs:
+          db_path: "fi_shortinterest_original.db"

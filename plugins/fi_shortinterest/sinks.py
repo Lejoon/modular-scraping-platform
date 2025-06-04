@@ -4,6 +4,7 @@ Database sink that implements the Transform interface.
 
 import logging
 from typing import Dict, List, AsyncIterator, Any
+from datetime import datetime
 
 from core.interfaces import Sink
 from core.models import ParsedItem
@@ -148,15 +149,15 @@ class DatabaseSink(Sink):
         """)
 
     async def handle(self, item: ParsedItem) -> None:
-        """Handle a parsed item by persisting to database."""
+        """Handle a parsed item by upserting to database."""
         if item.topic not in self._TABLE_MAP:
             logger.debug(f"No table mapping for topic: {item.topic}")
             return
         
         config = self._TABLE_MAP[item.topic]
         table = config["table"]
-        pk_columns = config["pk"]
         columns = config["cols"]
+        pk_columns = config["pk"]
         
         # Extract data for the configured columns
         data = {}
@@ -170,10 +171,57 @@ class DatabaseSink(Sink):
             return
         
         try:
-            await self.db.upsert(table, data, pk_columns)
-            logger.info(f"Upserted data to {table}: columns={list(data.keys())}")
+            # Check if this is a removal event (for diff topics)
+            if (item.topic.endswith('.diff') and 
+                item.content.get('removal_detected') and 
+                float(item.content.get('new_pct', 0)) == 0.0):
+                
+                # For removal events, delete from the main table and add to history
+                await self._handle_removal(item, config)
+            else:
+                # Normal upsert operation
+                await self.db.upsert(table, data, pk_columns)
+                logger.info(f"Upserted data to {table}: columns={list(data.keys())}")
         except Exception as e:
-            logger.error(f"Failed to upsert data to {table}: {e}")
+            logger.error(f"Failed to handle item for {table}: {e}")
+
+    async def _handle_removal(self, item: ParsedItem, config: Dict) -> None:
+        """Handle removal events by deleting from main table and recording in history."""
+        table = config["table"]
+        columns = config["cols"] 
+        pk_columns = config["pk"]
+        
+        # Always insert into history table
+        data = {}
+        for col in columns:
+            value = item.content.get(col)
+            if value is not None:
+                data[col] = value
+        
+        await self.db.upsert(table, data, pk_columns)
+        logger.info(f"Recorded removal event in {table}")
+        
+        # Determine the main table to delete from based on topic
+        if item.topic == "fi.short.aggregate.diff":
+            main_table = "short_positions"
+            where_clause = "lei = ?"
+            where_params = (item.content.get("lei"),)
+        elif item.topic == "fi.short.positions.diff":
+            main_table = "position_holders"
+            where_clause = "entity_name = ? AND issuer_name = ? AND isin = ?"
+            where_params = (
+                item.content.get("entity_name"),
+                item.content.get("issuer_name"), 
+                item.content.get("isin")
+            )
+        else:
+            logger.warning(f"Unknown removal topic: {item.topic}")
+            return
+        
+        # Delete from main table
+        delete_query = f"DELETE FROM {main_table} WHERE {where_clause}"
+        await self.db.execute(delete_query, where_params)
+        logger.info(f"Deleted removed entity from {main_table}: {where_params}")
 
     async def close(self) -> None:
         """Close the database connection."""

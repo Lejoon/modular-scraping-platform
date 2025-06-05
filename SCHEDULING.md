@@ -50,8 +50,11 @@ pip install croniter sqlalchemy
 ### 2. Set Environment Variables
 
 ```bash
-export SCHEDULER_MODE=scheduler
-export DISCORD_TOKEN=your_discord_bot_token  # Optional
+# Optional: Disable scheduler for one-time runs
+export SCHEDULER_MODE=disabled
+
+# Optional: Enable Discord bot
+export DISCORD_TOKEN=your_discord_bot_token
 ```
 
 ### 3. Update Pipeline Configuration
@@ -71,7 +74,7 @@ pipelines:
 ### 4. Run with Scheduler
 
 ```bash
-python main_scheduler.py
+python main.py  # Scheduler mode is enabled by default
 ```
 
 ## Configuration
@@ -164,7 +167,13 @@ export SCHEDULER_TIMEZONE=America/New_York
 ### Local Development
 
 ```bash
-python main_scheduler.py
+python main.py  # Scheduler enabled by default
+```
+
+### One-time Execution
+
+```bash
+SCHEDULER_MODE=disabled python main.py  # Run pipelines once and exit
 ```
 
 ### Docker
@@ -175,8 +184,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 COPY . .
-ENV SCHEDULER_MODE=scheduler
-CMD ["python", "main_scheduler.py"]
+# Scheduler mode is enabled by default
+CMD ["python", "main.py"]
 ```
 
 ### Kubernetes
@@ -201,12 +210,12 @@ spec:
           restartPolicy: OnFailure
 ```
 
-## Backwards Compatibility
+## Usage
 
-The existing `main.py` continues to work unchanged. The scheduler is additive:
+The `main.py` file now includes scheduler functionality by default:
 
-- `main.py` - Original behavior, runs pipelines once
-- `main_scheduler.py` - New scheduler + Discord bot support
+- **Scheduler mode (default)**: Runs with APScheduler and optional Discord bot
+- **One-time mode**: Set `SCHEDULER_MODE=disabled` to run pipelines once and exit
 
 ## Error Handling
 
@@ -227,10 +236,10 @@ Monitor your scheduled jobs:
 
 To migrate existing setups:
 
-1. **No changes required** for basic usage
+1. **No changes required** for basic usage - scheduler is now enabled by default
 2. **Add scheduling** by updating YAML configuration
 3. **Enable Discord** by setting `DISCORD_TOKEN`
-4. **Switch entry point** from `main.py` to `main_scheduler.py`
+4. **Use single entry point** - `main.py` now handles both scheduler and one-time modes
 
 ## Examples
 
@@ -272,7 +281,7 @@ The following features have been tested and verified:
 ### ✅ Configuration
 - **Environment variables**: `SCHEDULER_MODE`, `PIPELINES_CONFIG` working correctly
 - **YAML configuration**: Both cron and interval scheduling formats parsed correctly
-- **Legacy compatibility**: `SCHEDULER_MODE=legacy` preserves old behavior
+- **Legacy compatibility**: `SCHEDULER_MODE=disabled` preserves one-time execution behavior
 
 **Test Results Summary:**
 - 4/4 scheduled pipelines registered successfully

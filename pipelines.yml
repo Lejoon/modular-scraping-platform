@@ -1,20 +1,28 @@
 pipelines:
   # FI Short Interest - Aggregate data pipeline with diff detection
+  # Runs every 10 minutes
   fi_shortinterest_agg:
-    chain:
-      - class: fi_shortinterest.FiFetcher
-        kwargs: {}
-      - class: fi_shortinterest.FiAggParser
-        kwargs: {}
-      - class: fi_shortinterest.DiffParser
-        kwargs:
-          db_path: "fi_shortinterest.db"
-      - class: fi_shortinterest.DatabaseSink
-        kwargs:
-          db_path: "fi_shortinterest.db"
+  schedule:
+    interval:
+      minutes: 10  # Every 10 minutes
+  chain:
+    - class: fi_shortinterest.FiFetcher
+      kwargs: {}
+    - class: fi_shortinterest.FiAggParser
+      kwargs: {}
+    - class: fi_shortinterest.DiffParser
+      kwargs:
+        db_path: "fi_shortinterest.db"
+    - class: fi_shortinterest.DatabaseSink
+      kwargs:
+        db_path: "fi_shortinterest.db"
 
   # FI Short Interest - Position data pipeline with diff detection
+  # Runs every 10 minutes
   fi_shortinterest_pos:
+    schedule:
+      interval:
+        minutes: 10  # Every 10 minutes
     chain:
       - class: fi_shortinterest.FiFetcher
         kwargs: {}
@@ -28,24 +36,30 @@ pipelines:
           db_path: "fi_shortinterest.db"
 
   # TCGPlayer - Pokemon sets CSV data pipeline
+  # Runs at 9 PM every day
   tcgplayer_pokemon_sets:
-    chain:
-      - class: tcgplayer.PokemonSetsCsvFetcher
-        kwargs:
-          csv_path: "development/tcg/pokemon_sets.csv"
-      - class: tcgplayer.PokemonSetsParser
-      - class: tcgplayer.TcgDatabaseSink
-        kwargs:
-          db_path: "tcg.db"
+  schedule:
+    cron: "0 21 * * *"  # Daily at 9 PM (21:00)
+  chain:
+    - class: tcgplayer.PokemonSetsCsvFetcher
+      kwargs:
+        csv_path: "development/tcg/pokemon_sets.csv"
+    - class: tcgplayer.PokemonSetsParser
+    - class: tcgplayer.TcgDatabaseSink
+      kwargs:
+        db_path: "tcg.db"
 
-  # TCGPlayer - Price history data pipeline (example with limited product IDs)
+  # TCGPlayer - Price history data pipeline
+  # Runs at 9 PM every day
   tcgplayer_price_history:
-    chain:
-      - class: tcgplayer.TcgPlayerPriceHistoryFetcher
-        kwargs:
-          db_path: "tcg.db"
-          delay_seconds: 2.0
-      - class: tcgplayer.PriceHistoryParser
-      - class: tcgplayer.TcgDatabaseSink
-        kwargs:
-          db_path: "tcg.db"
+  schedule:
+    cron: "0 21 * * *"  # Daily at 9 PM (21:00)
+  chain:
+    - class: tcgplayer.TcgPlayerPriceHistoryFetcher
+      kwargs:
+        db_path: "tcg.db"
+        delay_seconds: 2.0
+    - class: tcgplayer.PriceHistoryParser
+    - class: tcgplayer.TcgDatabaseSink
+      kwargs:
+        db_path: "tcg.db"

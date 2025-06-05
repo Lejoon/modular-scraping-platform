@@ -7,10 +7,11 @@ import logging
 import yaml
 from contextlib import AsyncExitStack
 from pathlib import Path
-from typing import Any, AsyncIterator, Dict, List
+from typing import Any, AsyncIterator, Dict, List, Optional, Callable
 
 from .interfaces import Transform
 from .plugin_loader import get as load_transform_class
+from .infra.scheduler import Scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,90 @@ async def run_pipeline_with_schedule(cfg: Dict[str, Any]) -> None:
     """Run a pipeline with optional scheduling."""
     # For now, just run once. TODO: Add cron scheduling
     await run_pipeline(cfg)
+
+
+# Global registry for scheduled pipeline configs
+_scheduled_pipeline_configs = {}
+
+
+def _store_pipeline_config(job_id: str, cfg: Dict[str, Any]) -> None:
+    """Store pipeline config for scheduled execution."""
+    _scheduled_pipeline_configs[job_id] = cfg
+
+
+async def _execute_scheduled_pipeline(job_id: str) -> None:
+    """Execute a scheduled pipeline by job_id. Used by APScheduler."""
+    if job_id in _scheduled_pipeline_configs:
+        cfg = _scheduled_pipeline_configs[job_id]
+        await run_pipeline(cfg)
+    else:
+        logger.error(f"Pipeline config not found for job_id: {job_id}")
+
+
+async def create_pipeline_runner(cfg: Dict[str, Any]) -> str:
+    """Create a serializable reference for a pipeline. Returns function path for scheduling."""
+    job_id = f"pipeline_{cfg.get('name', 'unnamed')}"
+    _store_pipeline_config(job_id, cfg)
+    return f"core.pipeline_orchestrator:_execute_scheduled_pipeline"
+
+
+async def run_all_with_scheduler(pipelines_cfg: List[Dict[str, Any]], scheduler: Optional[Scheduler] = None) -> None:
+    """Run all pipelines with scheduler support for cron/interval jobs."""
+    if scheduler is None:
+        # If no scheduler provided, fall back to run_all
+        await run_all(pipelines_cfg)
+        return
+    
+    tasks = []
+    
+    for pipeline_cfg in pipelines_cfg:
+        pipeline_name = pipeline_cfg.get("name", "unnamed")
+        
+        # Check for scheduling configuration
+        schedule_cfg = pipeline_cfg.get("schedule")
+        
+        if schedule_cfg:
+            # Create a pipeline runner
+            runner = await create_pipeline_runner(pipeline_cfg)
+            job_id = f"pipeline_{pipeline_name}"
+            
+            if "cron" in schedule_cfg:
+                # Schedule with cron expression
+                cron_expr = schedule_cfg["cron"]
+                scheduler.add_cron_job(runner, cron_expression=cron_expr, job_id=job_id)
+                logger.info(f"Scheduled pipeline '{pipeline_name}' with cron: {cron_expr}")
+                
+            elif "interval" in schedule_cfg:
+                # Schedule with interval
+                interval_cfg = schedule_cfg["interval"]
+                scheduler.add_interval_job(
+                    runner,
+                    seconds=interval_cfg.get("seconds"),
+                    minutes=interval_cfg.get("minutes"),
+                    hours=interval_cfg.get("hours"),
+                    job_id=job_id
+                )
+                logger.info(f"Scheduled pipeline '{pipeline_name}' with interval: {interval_cfg}")
+                
+            else:
+                logger.warning(f"Pipeline '{pipeline_name}' has 'schedule' config but no 'cron' or 'interval' specified")
+                # Run once as fallback
+                task = asyncio.create_task(
+                    run_pipeline(pipeline_cfg),
+                    name=f"pipeline-{pipeline_name}"
+                )
+                tasks.append(task)
+        else:
+            # No scheduling, run once
+            task = asyncio.create_task(
+                run_pipeline(pipeline_cfg),
+                name=f"pipeline-{pipeline_name}"
+            )
+            tasks.append(task)
+    
+    # Wait for any immediate tasks to complete
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def run_all(pipelines_cfg: List[Dict[str, Any]]) -> None:

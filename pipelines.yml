@@ -63,3 +63,15 @@ pipelines:
     - class: tcgplayer.TcgDatabaseSink
       kwargs:
         db_path: "tcg.db"
+
+pipelines:
+  - name: appmagic_companies
+    schedule:
+      interval: { minutes: 1 }          # every six hours
+    stages:
+      - "core.plugins.appmagic.fetcher.AppMagicFetcher":
+          companies:
+            - { name: "Big Blue Bubble", ticker: "EG7", store: 1, store_publisher_id: "6388759014800755560" }
+      - "core.plugins.appmagic.parser.AppMagicParser": {}
+      - "core.plugins.appmagic.sinks.AppMagicSink":
+          db_path: "mobile_analytics.db"

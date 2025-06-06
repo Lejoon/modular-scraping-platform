@@ -74,10 +74,10 @@ pipelines:
       - class: appmagic.AppMagicFetcher
         kwargs:
           companies:
-            - name: "Big Blue Bubble"
-              ticker: "EG7"
+            - name: "Mag Interactive"
+              ticker: "MAGI"
               store: 1
-              store_publisher_id: "6388759014800755560"
+              store_publisher_id: "6558349509091194327"
       - class: appmagic.AppMagicParser
         kwargs: {}
       - class: appmagic.AppMagicSink

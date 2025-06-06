@@ -348,6 +348,18 @@ CREATE TABLE IF NOT EXISTS PublisherAppsSummary (
         await self._log_table_counts()
 
     # ------------------------------------------------------------------ #
+    async def __aenter__(self):
+        """Async context manager entry."""
+        await self.db.connect()
+        await self._create_all_tables()
+        self._ddl_executed = True
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit."""
+        await self.db.close()
+
+    # ------------------------------------------------------------------ #
     async def _create_all_tables(self) -> None:
         for ddl in self._DDL.values():
             await self.db.execute(ddl)
@@ -356,35 +368,14 @@ CREATE TABLE IF NOT EXISTS PublisherAppsSummary (
     async def _upsert(
         self, table: str, pk: List[str], cols: List[str], row: Dict[str, Any]
     ) -> None:
-        actual_cols, plch = [], []
+        # Extract only the columns that have data
+        data = {}
         for c in cols:
             if c in row:
-                actual_cols.append(c)
-                plch.append(f":{c}")
-
-        pk_clause = ", ".join(pk)
-        update_set = ", ".join(
-            f"{c}=excluded.{c}"
-            for c in actual_cols
-            if c not in pk  # don't update primary-key columns
-        )
-
-        # Handle case where all columns are primary keys (no columns to update)
-        if update_set:
-            sql = f"""
-INSERT INTO {table} ({', '.join(actual_cols)})
-VALUES ({', '.join(plch)})
-ON CONFLICT ({pk_clause}) DO UPDATE SET {update_set};
-"""
-        else:
-            # If no columns to update, just insert and ignore conflicts
-            sql = f"""
-INSERT INTO {table} ({', '.join(actual_cols)})
-VALUES ({', '.join(plch)})
-ON CONFLICT ({pk_clause}) DO NOTHING;
-"""
+                data[c] = row[c]
         
-        await self.db.execute(sql, row)
+        # Use the Database's upsert method which handles commits properly
+        await self.db.upsert(table, data, pk)
 
     # ------------------------------------------------------------------ #
     async def _log_table_counts(self) -> None:

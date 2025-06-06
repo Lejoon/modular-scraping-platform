@@ -65,8 +65,7 @@ class AppMagicFetcher(Fetcher):
         self._http = http or HttpClient(max_retries=max_retries)
         self._include_apps = include_apps
         self._include_country_split = include_country_split
-
-    # ------------------------------------------------------------------- #
+ #------------------------------------------------------------------- #
     # Async context manager for proper resource cleanup
     # ------------------------------------------------------------------- #
     async def __aenter__(self):
@@ -83,16 +82,44 @@ class AppMagicFetcher(Fetcher):
     # ------------------------------------------------------------------- #
     async def _safe_get_json(self, url: str, **kw) -> Dict[str, Any]:
         try:
-            return await self._http.get_json(url, **kw) or {}
+            logger.debug(f"Making GET request to: {url} with params: {kw.get('params', {})}")
+            result = await self._http.get_json(url, **kw) or {}
+            logger.info(f"GET {url} succeeded, response keys: {list(result.keys()) if isinstance(result, dict) else 'not a dict'}")
+            if isinstance(result, dict) and result:
+                # Log a sample of the response structure
+                sample_keys = list(result.keys())[:5]  # First 5 keys
+                logger.debug(f"Response sample keys: {sample_keys}")
+                for key in sample_keys:
+                    if isinstance(result[key], list):
+                        logger.debug(f"  {key}: list with {len(result[key])} items")
+                    elif isinstance(result[key], dict):
+                        logger.debug(f"  {key}: dict with keys {list(result[key].keys())[:3]}")
+                    else:
+                        logger.debug(f"  {key}: {type(result[key]).__name__}")
+            return result
         except Exception as exc:  # noqa: BLE001
-            logger.debug("GET %s failed: %s", url, exc)
+            logger.warning("GET %s failed: %s", url, exc)
             return {}
 
     async def _safe_post_json(self, url: str, data: Dict[str, Any]) -> Dict[str, Any]:
         try:
-            return await self._http.post_json(url, data) or {}
+            logger.debug(f"Making POST request to: {url} with data: {data}")
+            result = await self._http.post_json(url, data) or {}
+            logger.info(f"POST {url} succeeded, response keys: {list(result.keys()) if isinstance(result, dict) else 'not a dict'}")
+            if isinstance(result, dict) and result:
+                # Log a sample of the response structure
+                sample_keys = list(result.keys())[:5]
+                logger.debug(f"Response sample keys: {sample_keys}")
+                for key in sample_keys:
+                    if isinstance(result[key], list):
+                        logger.debug(f"  {key}: list with {len(result[key])} items")
+                    elif isinstance(result[key], dict):
+                        logger.debug(f"  {key}: dict with keys {list(result[key].keys())[:3]}")
+                    else:
+                        logger.debug(f"  {key}: {type(result[key]).__name__}")
+            return result
         except Exception as exc:  # noqa: BLE001
-            logger.debug("POST %s failed: %s", url, exc)
+            logger.warning("POST %s failed: %s", url, exc)
             return {}
 
     async def _safe_get_text(self, url: str, **kw) -> str:
@@ -254,7 +281,11 @@ class AppMagicFetcher(Fetcher):
                 break
             
             if not hits:
+                logger.debug(f"No more apps found for publisher {up_id}")
                 break
+            
+            logger.debug(f"Found {len(applications)} apps for publisher {up_id} at offset {from_offset}")
+            total_apps += len(applications)
                 
             yield RawItem(
                 source="appmagic.publisher_apps_api",
@@ -269,9 +300,12 @@ class AppMagicFetcher(Fetcher):
             
             # Check if we have more pages
             if len(applications) < page_size:
+                logger.debug(f"Reached end of apps for publisher {up_id} (got {len(applications)} < {page_size})")
                 break
                 
             from_offset += len(applications)
+        
+        logger.info(f"Completed app fetch for publisher {up_id}: {total_apps} total apps")
 
     # ------------------------------------------------------------------- #
     @staticmethod

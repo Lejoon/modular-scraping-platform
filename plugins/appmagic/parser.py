@@ -109,15 +109,21 @@ class AppMagicParser(Transform):
 
     # ------------------------------------------------------------------- #
     async def __call__(self, items: AsyncIterator[Any]) -> AsyncIterator[ParsedItem]:
+        logger.info("AppMagicParser: Starting parsing process")
         # First pass: collect all data
         all_items = []
+        item_count = 0
         async for item in items:
             if not isinstance(item, RawItem):
                 yield item
                 continue
             all_items.append(item)
+            item_count += 1
+        
+        logger.info(f"AppMagicParser: Collected {item_count} raw items to process")
 
         # Process items and group by publisher
+        processed_items = 0
         for item in all_items:
             try:
                 payload = json.loads(item.payload)
@@ -129,8 +135,12 @@ class AppMagicParser(Transform):
             if handler is None:
                 logger.debug("No parser for %s", item.source)
                 continue
+            
+            logger.debug(f"Processing item {processed_items+1}/{len(all_items)}: {item.source}")
+            processed_items += 1
 
             parsed_items = handler(payload)
+            logger.debug(f"Handler for {item.source} produced {len(parsed_items)} parsed items")
             
             # For API and HTML data, store for merging
             if item.source == "appmagic.publisher_apps_api":
@@ -139,6 +149,7 @@ class AppMagicParser(Transform):
                     if up_id not in self._api_data_by_publisher:
                         self._api_data_by_publisher[up_id] = []
                     self._api_data_by_publisher[up_id].extend(parsed_items)
+                    logger.debug(f"Stored {len(parsed_items)} API items for publisher {up_id}")
                 continue
             elif item.source in ["appmagic.publisher_html", "appmagic.html"]:
                 up_id = payload.get("up_id")
@@ -146,18 +157,31 @@ class AppMagicParser(Transform):
                     if up_id not in self._html_data_by_publisher:
                         self._html_data_by_publisher[up_id] = []
                     self._html_data_by_publisher[up_id].extend(parsed_items)
+                    logger.debug(f"Stored {len(parsed_items)} HTML items for publisher {up_id}")
                 continue
             
             # For other sources, yield immediately
+            immediate_yield_count = 0
             for parsed in parsed_items:
                 yield parsed
+                immediate_yield_count += 1
+            logger.debug(f"Immediately yielded {immediate_yield_count} items for {item.source}")
 
         # Now merge API and HTML data
         all_publishers = set(self._api_data_by_publisher.keys()) | set(self._html_data_by_publisher.keys())
+        logger.info(f"AppMagicParser: Merging data for {len(all_publishers)} publishers")
         
+        total_merged_items = 0
         for up_id in all_publishers:
+            logger.debug(f"Merging data for publisher {up_id}")
+            publisher_items = 0
             async for merged_item in self._merge_publisher_data(up_id):
                 yield merged_item
+                publisher_items += 1
+                total_merged_items += 1
+            logger.debug(f"Generated {publisher_items} merged items for publisher {up_id}")
+        
+        logger.info(f"AppMagicParser: Completed parsing - {total_merged_items} total merged items generated")
 
     # ------------------------------------------------------------------- #
     async def _merge_publisher_data(self, up_id: int) -> AsyncIterator[ParsedItem]:
@@ -498,10 +522,24 @@ def _handler_publisher_apps_api(obj: Dict[str, Any]) -> List[ParsedItem]:
     out: List[ParsedItem] = []
     up_id = obj.get("united_publisher_id")
     
+    logger.info(f"Processing publisher_apps_api for publisher {up_id}")
+    applications = obj.get("applications", [])
+    logger.info(f"Found {len(applications)} applications in API data")
+    
+    if len(applications) > 0:
+        # Log a sample of the first app to see structure
+        sample_app = applications[0]
+        logger.debug(f"Sample app structure: {list(sample_app.keys()) if isinstance(sample_app, dict) else type(sample_app)}")
+        if isinstance(sample_app, dict):
+            logger.debug(f"Sample app data: {dict(list(sample_app.items())[:5])}")  # First 5 fields
+    
     # Process applications from API search results
-    for app in obj.get("applications", []):
-        ua_id = app.get("united_application_id")
+    for i, app in enumerate(applications):
+        ua_id = app.get("id")  # API uses 'id', not 'united_application_id'
+        logger.debug(f"Processing app {i+1}/{len(applications)}: ua_id={ua_id}, name={app.get('name', 'unknown')}")
+        
         if not ua_id:
+            logger.warning(f"App {i+1} missing id: {app}")
             continue
             
         # Create application record
@@ -513,7 +551,7 @@ def _handler_publisher_apps_api(obj: Dict[str, Any]) -> List[ParsedItem]:
                     "united_publisher_id": up_id,
                     "name": app.get("name"),
                     "icon_url": app.get("icon_url"),
-                    "release_date": app.get("release_date"),
+                    "release_date": app.get("releaseDate"),  # API uses 'releaseDate'
                     "contains_ads": app.get("contains_ads"),
                     "has_in_app_purchases": app.get("has_in_app_purchases"),
                     "first_seen_at": datetime.utcnow().isoformat(),
@@ -522,30 +560,63 @@ def _handler_publisher_apps_api(obj: Dict[str, Any]) -> List[ParsedItem]:
         )
         
         # Create metrics record if snapshot data exists
-        snapshot = app.get("snapshot", {})
-        if snapshot:
+        metrics_30d = app.get("metrics_30d")
+        metrics_lifetime = app.get("metrics_lifetime")
+        
+        # Handle different possible structures for metrics
+        downloads_30d = None
+        revenue_30d = None
+        downloads_lifetime = None
+        revenue_lifetime = None
+        
+        if isinstance(metrics_30d, dict):
+            downloads_30d = metrics_30d.get("downloads")
+            revenue_30d = metrics_30d.get("revenue")
+        elif isinstance(metrics_30d, list) and metrics_30d:
+            # If it's a list, take the first item
+            first_30d = metrics_30d[0] if isinstance(metrics_30d[0], dict) else {}
+            downloads_30d = first_30d.get("downloads")
+            revenue_30d = first_30d.get("revenue")
+            
+        if isinstance(metrics_lifetime, dict):
+            downloads_lifetime = metrics_lifetime.get("downloads")
+            revenue_lifetime = metrics_lifetime.get("revenue")
+        elif isinstance(metrics_lifetime, list) and metrics_lifetime:
+            # If it's a list, take the first item
+            first_lifetime = metrics_lifetime[0] if isinstance(metrics_lifetime[0], dict) else {}
+            downloads_lifetime = first_lifetime.get("downloads")
+            revenue_lifetime = first_lifetime.get("revenue")
+        
+        # Also check direct fields on the app object
+        if downloads_30d is None:
+            downloads_30d = app.get("downloads")
+        if revenue_30d is None:
+            revenue_30d = app.get("revenue")
+        
+        if any([downloads_30d, revenue_30d, downloads_lifetime, revenue_lifetime]):
             out.append(
                 ParsedItem(
                     topic="appmagic.publisher_apps_metrics", 
                     content={
                         "scrape_date": datetime.utcnow().date().isoformat(),
                         "united_application_id": ua_id,
-                        "snapshot_30d_downloads": snapshot.get("downloads_30d"),
-                        "snapshot_30d_revenue": snapshot.get("revenue_30d"),
-                        "snapshot_lifetime_downloads": snapshot.get("downloads_lifetime"),
-                        "snapshot_lifetime_revenue": snapshot.get("revenue_lifetime"),
+                        "snapshot_30d_downloads": downloads_30d,
+                        "snapshot_30d_revenue": revenue_30d,
+                        "snapshot_lifetime_downloads": downloads_lifetime,
+                        "snapshot_lifetime_revenue": revenue_lifetime,
                     }
                 )
             )
             
-        # Create store records
-        for store_app in app.get("store_applications", []):
+        # Create store records - check different possible field names
+        store_apps = app.get("applications", []) or app.get("store_applications", [])
+        for store_app in store_apps:
             out.append(
                 ParsedItem(
                     topic="appmagic.application.store",
                     content={
-                        "store_id": store_app.get("store_id"),
-                        "store_app_id_text": store_app.get("store_app_id"),
+                        "store_id": store_app.get("store_id") or store_app.get("store"),
+                        "store_app_id_text": store_app.get("store_app_id") or store_app.get("bundleId") or store_app.get("storeAppId"),
                         "united_application_id": ua_id,
                         "name_on_store": store_app.get("name"),
                         "store_url": store_app.get("url"),

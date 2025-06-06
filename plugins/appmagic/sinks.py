@@ -323,14 +323,29 @@ CREATE TABLE IF NOT EXISTS PublisherAppsSummary (
             logger.debug("No sink rule for topic %s", item.topic)
             return
 
+        logger.debug(f"Sinking item to table {cfg['table']}: {item.topic}")
         await self._upsert(cfg["table"], cfg["pk"], cfg["cols"], item.content)
+        logger.debug(f"Successfully sunk item to {cfg['table']}")
 
     # ------------------------------------------------------------------ #
     async def __call__(self, stream):
+        logger.info("AppMagicSink: Starting to process items")
+        item_count = 0
+        topic_counts = {}
+        
         async for itm in stream:
             if isinstance(itm, ParsedItem):
                 await self.handle(itm)
+                item_count += 1
+                topic_counts[itm.topic] = topic_counts.get(itm.topic, 0) + 1
             yield None  # sink is terminal but keeps the pipeline contract
+        
+        logger.info(f"AppMagicSink: Processed {item_count} total items")
+        for topic, count in topic_counts.items():
+            logger.info(f"  - {topic}: {count} items")
+        
+        # Log table record counts
+        await self._log_table_counts()
 
     # ------------------------------------------------------------------ #
     async def _create_all_tables(self) -> None:
@@ -354,12 +369,37 @@ CREATE TABLE IF NOT EXISTS PublisherAppsSummary (
             if c not in pk  # don't update primary-key columns
         )
 
-        sql = f"""
+        # Handle case where all columns are primary keys (no columns to update)
+        if update_set:
+            sql = f"""
 INSERT INTO {table} ({', '.join(actual_cols)})
 VALUES ({', '.join(plch)})
 ON CONFLICT ({pk_clause}) DO UPDATE SET {update_set};
 """
+        else:
+            # If no columns to update, just insert and ignore conflicts
+            sql = f"""
+INSERT INTO {table} ({', '.join(actual_cols)})
+VALUES ({', '.join(plch)})
+ON CONFLICT ({pk_clause}) DO NOTHING;
+"""
+        
         await self.db.execute(sql, row)
+
+    # ------------------------------------------------------------------ #
+    async def _log_table_counts(self) -> None:
+        """Log the number of records in each table for debugging."""
+        try:
+            logger.info("Database table record counts:")
+            for table_name in self._DDL.keys():
+                try:
+                    result = await self.db.fetch_one(f"SELECT COUNT(*) as count FROM {table_name}")
+                    count = result['count'] if result else 0
+                    logger.info(f"  - {table_name}: {count} records")
+                except Exception as e:
+                    logger.debug(f"  - {table_name}: Error counting records - {e}")
+        except Exception as e:
+            logger.warning(f"Failed to log table counts: {e}")
 
 
 # ----------------------------------------------------------------------- #

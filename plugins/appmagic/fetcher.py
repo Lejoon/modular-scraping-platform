@@ -46,11 +46,8 @@ class AppMagicFetcher(Fetcher):
 
     _URL_GROUPS = _BASE + "/publishers/groups"
     _URL_SEARCH = _BASE + "/united-publishers/search-by-ids"
-    _URL_APPS = _BASE + "/united-publishers/{up_id}/apps"
+    _URL_PUBLISHER_APPS = _BASE + "/search/publisher-applications"
     _URL_COUNTRIES = _BASE + "/united-publishers/data-countries"
-    _URL_METRICS = (
-        _BASE + "/united-applications/{ua_id}/metrics?country=WW&currency=USD&period=30"
-    )
 
     # ------------------------------------------------------------------- #
     def __init__(
@@ -60,10 +57,14 @@ class AppMagicFetcher(Fetcher):
         rate_limit_s: float = 0.8,
         max_retries: int = 4,
         http: Optional[HttpClient] = None,
+        include_apps: bool = True,
+        include_country_split: bool = False,
     ) -> None:
         self._companies = companies
         self._rl = rate_limit_s
         self._http = http or HttpClient(max_retries=max_retries)
+        self._include_apps = include_apps
+        self._include_country_split = include_country_split
 
     # ------------------------------------------------------------------- #
     # resilient wrappers around HttpClient
@@ -144,42 +145,24 @@ class AppMagicFetcher(Fetcher):
                 continue
             seen.add(up_id)
 
-            # apps list
-            apps_payload = await self._safe_get_json(
-                self._URL_APPS.format(up_id=up_id), params={"page": 1, "pageSize": 500}
-            )
-            apps = apps_payload.get("applications", [])
-            yield RawItem(
-                source="appmagic.apps",
-                payload=json.dumps({"up_id": up_id, "company": company, "apps": apps}).encode(),
-                fetched_at=fetched_at,
-            )
+            # publisher apps via new search API (if enabled)
+            if self._include_apps:
+                async for item in self._fetch_publisher_apps(up_id, company, fetched_at):
+                    yield item
 
-            # app metrics
-            for app in apps:
-                ua_id = app.get("id")
-                if not ua_id:
-                    continue
-                snap = await self._safe_get_json(self._URL_METRICS.format(ua_id=ua_id))
-                if snap:
+            # country metrics (if enabled)
+            if self._include_country_split:
+                ctry_payload = await self._safe_get_json(
+                    self._URL_COUNTRIES, params={"united_publisher_id": up_id}
+                )
+                if ctry_payload:
                     yield RawItem(
-                        source="appmagic.app.metrics",
-                        payload=json.dumps({"ua_id": ua_id, "snapshot": snap}).encode(),
+                        source="appmagic.publisher.country.metrics",
+                        payload=json.dumps(
+                            {"united_publisher_id": up_id, "countries": ctry_payload}
+                        ).encode(),
                         fetched_at=fetched_at,
                     )
-
-            # country metrics
-            ctry_payload = await self._safe_get_json(
-                self._URL_COUNTRIES, params={"united_publisher_id": up_id}
-            )
-            if ctry_payload:
-                yield RawItem(
-                    source="appmagic.publisher.country.metrics",
-                    payload=json.dumps(
-                        {"united_publisher_id": up_id, "countries": ctry_payload}
-                    ).encode(),
-                    fetched_at=fetched_at,
-                )
 
             # HTML page
             for acc in pub.get("accounts", []):
@@ -191,7 +174,7 @@ class AppMagicFetcher(Fetcher):
                 html = await self._safe_get_text(url)
                 if html:
                     yield RawItem(
-                        source="appmagic.html",
+                        source="appmagic.publisher_html",
                         payload=json.dumps(
                             {
                                 "up_id": up_id,
@@ -203,6 +186,56 @@ class AppMagicFetcher(Fetcher):
                         ).encode(),
                         fetched_at=fetched_at,
                     )
+
+    # ------------------------------------------------------------------- #
+    async def _fetch_publisher_apps(
+        self, up_id: int, company: Dict[str, Any], fetched_at: datetime
+    ) -> AsyncIterator[RawItem]:
+        """Fetch apps using the new publisher-applications search API with paging."""
+        from_offset = 0
+        page_size = 100
+
+        while True:
+            params = {
+                "sort": "downloads",
+                "united_publisher_id": up_id,
+                "from": from_offset,
+            }
+            
+            payload = await self._safe_get_json(self._URL_PUBLISHER_APPS, params=params)
+            
+            # Handle different response structures
+            if isinstance(payload, list):
+                # If payload is directly a list of applications
+                hits = payload
+                applications = payload
+            elif isinstance(payload, dict):
+                # If payload is a dictionary with hits or applications key
+                hits = payload.get("hits", payload.get("applications", []))
+                applications = hits
+            else:
+                logger.warning(f"Unexpected payload type: {type(payload)}")
+                break
+            
+            if not hits:
+                break
+                
+            yield RawItem(
+                source="appmagic.publisher_apps_api",
+                payload=json.dumps({
+                    "united_publisher_id": up_id,
+                    "company": company,
+                    "applications": applications,
+                    "from_offset": from_offset,
+                }).encode(),
+                fetched_at=fetched_at,
+            )
+            
+            # Check if we have more pages
+            if len(applications) < page_size:
+                break
+                
+            from_offset += len(applications)
 
     # ------------------------------------------------------------------- #
     @staticmethod

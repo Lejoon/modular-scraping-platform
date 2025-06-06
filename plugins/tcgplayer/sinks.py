@@ -66,6 +66,9 @@ class TcgDatabaseSink(Sink):
     
     async def __aenter__(self):
         """Initialize database connection and create tables."""
+        # Connect to database first
+        await self.db.connect()
+        
         # Create all tables
         for topic_config in self._table_configs.values():
             await self.db.execute(topic_config["schema"])

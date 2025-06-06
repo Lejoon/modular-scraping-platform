@@ -134,6 +134,16 @@ CREATE TABLE IF NOT EXISTS PublisherCountryMetrics (
                  metric_timespan)
 );
 """,
+        "PublisherAppsSummary": """
+CREATE TABLE IF NOT EXISTS PublisherAppsSummary (
+    united_publisher_id INTEGER,
+    scrape_date DATE,
+    html_only_count INTEGER DEFAULT 0,
+    api_only_count INTEGER DEFAULT 0,
+    merged_count INTEGER DEFAULT 0,
+    PRIMARY KEY (united_publisher_id, scrape_date)
+);
+""",
     }
 
     # ---------------------------- mapping ---------------------------- #
@@ -239,6 +249,58 @@ CREATE TABLE IF NOT EXISTS PublisherCountryMetrics (
                 "downloads",
                 "revenue_percent",
                 "downloads_percent",
+            ],
+        },
+        # new publisher-level data from search API
+        "appmagic.publisher_apps_api": {
+            "table": "UnitedApplications",
+            "pk": ["united_application_id"],
+            "cols": [
+                "united_application_id",
+                "united_publisher_id",
+                "name",
+                "icon_url",
+                "release_date",
+                "contains_ads",
+                "has_in_app_purchases",
+                "first_seen_at",
+            ],
+        },
+        "appmagic.publisher_apps_metrics": {
+            "table": "ApplicationSnapshotMetrics",
+            "pk": ["scrape_date", "united_application_id"],
+            "cols": [
+                "scrape_date",
+                "united_application_id",
+                "snapshot_30d_downloads",
+                "snapshot_30d_revenue",
+                "snapshot_lifetime_downloads",
+                "snapshot_lifetime_revenue",
+            ],
+        },
+        "appmagic.publisher_html": {
+            "table": "UnitedApplications",
+            "pk": ["united_application_id"],
+            "cols": [
+                "united_application_id",
+                "united_publisher_id",
+                "name",
+                "icon_url",
+                "release_date",
+                "contains_ads",
+                "has_in_app_purchases",
+                "first_seen_at",
+            ],
+        },
+        "appmagic.publisher_apps_summary": {
+            "table": "PublisherAppsSummary",
+            "pk": ["united_publisher_id", "scrape_date"],
+            "cols": [
+                "united_publisher_id",
+                "scrape_date",
+                "html_only_count",
+                "api_only_count",
+                "merged_count",
             ],
         },
     }

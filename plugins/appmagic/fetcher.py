@@ -1,16 +1,10 @@
 # core/plugins/appmagic/fetcher.py
-"""Fetcher stage for the *AppMagic* data‑pipeline.
+"""Async *Fetcher* for AppMagic.
 
-The implementation translates what used to be the ad‑hoc imperative
-script `scrape-company.py` into a reusable, schedule‑friendly transform
-that yields :class:`~core.models.RawItem` objects.
-
-Key points
-~~~~~~~~~~
-*  Uses :class:`core.infra.http.HttpClient` (shared across the platform)
-*  Respects rate limits via :pydata:`rate_limit_s`
-*  Emits *one* RawItem per logical payload so that downstream stages
-   can stay fully streaming / memory‑agnostic.
+‣ identical REST calls and request-payloads to `scrape-company.py`  
+‣ shape-guard for `"publishers" | "data" | "result"` wrappers  
+‣ publisher-country snapshot endpoint  
+‣ HTML page download via `construct_html_url`  
 """
 
 from __future__ import annotations
@@ -18,8 +12,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timezone
-from typing import AsyncIterator, Dict, List, Any, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional, Set
 
 from core.interfaces import Fetcher
 from core.models import RawItem
@@ -28,45 +23,36 @@ from core.infra.http import HttpClient
 logger = logging.getLogger(__name__)
 
 
+# --------------------------------------------------------------------------- #
+# Helpers
+# --------------------------------------------------------------------------- #
+def construct_html_url(name: str, store_id: int, store_publisher_id: str) -> str:
+    """Return the public AppMagic page for a publisher account."""
+    slug = re.sub(r"\s+", "-", name.strip().lower())
+    return f"https://appmagic.rocks/publisher/{slug}/{store_id}_{store_publisher_id}"
+
+
+# --------------------------------------------------------------------------- #
 class AppMagicFetcher(Fetcher):
-    """Asynchronously pulls publisher groups, united‑publishers and apps
-    for a predefined list of companies.
+    """Transform stage 1 / 3 – emits RawItems."""
 
-    Parameters
-    ----------
-    companies
-        Same object the legacy script expected – *list* of *dicts* with at
-        minimum keys::
+    # abstract‐method override ------------------------------------------------
+    @property
+    def name(self) -> str:  # noqa: D401  (property, not a verb)
+        return "AppMagicFetcher"
 
-            {
-                "name": "Embracer",
-                "ticker": "EMBRACB",
-                "store": 1,
-                "store_publisher_id": "6443412597262225303"
-            }
+    # -------- static endpoint paths ----------------------------------------
+    _BASE = "https://appmagic.rocks/api/v2"
 
-        Additional keys are simply forwarded into the RawItem's metadata
-        under *company*.
-    rate_limit_s
-        Seconds to ``asyncio.sleep`` between requests as a coarse‑grained
-        global limiter.
-    http
-        Optional externally‑managed HttpClient (mainly for testing).
-    """
-
-    name = "AppMagicFetcher"
-
-    # ---- End‑points ---------------------------------------------------- #
-
-    API_BASE = "https://api.appmagic.rocks/api/v2"
-
-    URL_GROUPS = API_BASE + "/publishers/groups"
-    URL_PUBLISHERS_SEARCH = API_BASE + "/united-publishers/search-by-ids"
-    URL_APPS_BY_PUBLISHER = API_BASE + "/united-publishers/{up_id}/apps"
-    URL_METRICS_BY_APP = API_BASE + "/united-applications/{ua_id}/metrics?country=WW&currency=USD"
+    _URL_GROUPS = _BASE + "/publishers/groups"
+    _URL_SEARCH = _BASE + "/united-publishers/search-by-ids"
+    _URL_APPS = _BASE + "/united-publishers/{up_id}/apps"
+    _URL_COUNTRIES = _BASE + "/united-publishers/data-countries"
+    _URL_METRICS = (
+        _BASE + "/united-applications/{ua_id}/metrics?country=WW&currency=USD&period=30"
+    )
 
     # ------------------------------------------------------------------- #
-
     def __init__(
         self,
         *,
@@ -76,120 +62,163 @@ class AppMagicFetcher(Fetcher):
         http: Optional[HttpClient] = None,
     ) -> None:
         self._companies = companies
-        self._rate_limit_s = rate_limit_s
-        self._max_retries = max_retries
+        self._rl = rate_limit_s
         self._http = http or HttpClient(max_retries=max_retries)
 
     # ------------------------------------------------------------------- #
-    # Transform interface
+    # resilient wrappers around HttpClient
     # ------------------------------------------------------------------- #
-
-    async def fetch(self) -> AsyncIterator[RawItem]:  # type: ignore[override]
-        """Entry‑point invoked by the pipeline orchestrator."""
-        for company in self._companies:
-            async for item in self._fetch_for_company(company):
-                yield item
-                # crude but effective RL
-                await asyncio.sleep(self._rate_limit_s)
-
-    async def __call__(self, _: AsyncIterator[Any]) -> AsyncIterator[RawItem]:  # noqa: D401
-        """Fetcher ignores *upstream* and simply yields raw items."""
-        async for raw in self.fetch():
-            yield raw
-
-    # ------------------------------------------------------------------- #
-    # Private helpers
-    # ------------------------------------------------------------------- #
-
-    async def _fetch_for_company(self, company: Dict[str, Any]) -> AsyncIterator[RawItem]:
-        """Complete flow for a single company dict."""
-        store_id = company.get("store") or 1
-        publisher_store_id = company["store_publisher_id"]
-
-        # 1) ----- Groups ------------------------------------------------- #
-        params = {"store": store_id, "publisherId": publisher_store_id}
+    async def _safe_get_json(self, url: str, **kw) -> Dict[str, Any]:
         try:
-            group_payload = await self._http.get_json(self.URL_GROUPS, params=params)
+            return await self._http.get_json(url, **kw) or {}
         except Exception as exc:  # noqa: BLE001
-            logger.warning("Group lookup failed for %s – %s", company["name"], exc)
-            group_payload = {"groups": []}  # treat as stand‑alone publisher
+            logger.debug("GET %s failed: %s", url, exc)
+            return {}
 
+    async def _safe_post_json(self, url: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            return await self._http.post_json(url, data) or {}
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("POST %s failed: %s", url, exc)
+            return {}
+
+    async def _safe_get_text(self, url: str, **kw) -> str:
+        try:
+            return await self._http.get_text(url, **kw)
+        except AttributeError:  # legacy client exposes .get
+            return await self._http.get(url, **kw)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("GET(text) %s failed: %s", url, exc)
+            return ""
+
+    # ------------------------------------------------------------------- #
+    async def fetch(self) -> AsyncIterator[RawItem]:
+        for company in self._companies:
+            async for itm in self._run_for_company(company):
+                yield itm
+                await asyncio.sleep(self._rl)
+
+    # ------------------------------------------------------------------- #
+    async def _run_for_company(
+        self, company: Dict[str, Any]
+    ) -> AsyncIterator[RawItem]:
         fetched_at = datetime.now(tz=timezone.utc)
+
+        store_id = company.get("store", 1)
+        store_pid = company["store_publisher_id"]
+
+        # 1 – groups ----------------------------------------------------
+        grp_payload = await self._safe_get_json(
+            self._URL_GROUPS,
+            params={"store": store_id, "store_publisher_id": store_pid},
+        )
+        grp_pubs = grp_payload.get("publishers", [])
 
         yield RawItem(
             source="appmagic.groups",
-            payload=json.dumps(
-                {
-                    "company": company,
-                    "groups": group_payload.get("groups", []),
-                }
-            ).encode(),
+            payload=json.dumps({"company": company, "groups": grp_pubs}).encode(),
             fetched_at=fetched_at,
         )
 
-        group_ids: list[int] = [g.get("id") for g in group_payload.get("groups", []) if g.get("id")]
-        if not group_ids:
-            # Single store publisher forms a degenerate group of size 1
-            group_ids = [publisher_store_id]
+        ids = [
+            {"store": p.get("store"), "store_publisher_id": p.get("store_publisher_id")}
+            for p in grp_pubs
+            if p.get("store") and p.get("store_publisher_id")
+        ] or [{"store": store_id, "store_publisher_id": store_pid}]
 
-        # 2) ----- United publishers ------------------------------------- #
-        pubs_payload = await self._http.post_json(
-            self.URL_PUBLISHERS_SEARCH, json={"ids": group_ids}
-        )
+        # 2 – united-publishers search ---------------------------------
+        search_payload = await self._safe_post_json(self._URL_SEARCH, {"ids": ids})
+        publishers = self._extract_publishers(search_payload)
+
         yield RawItem(
             source="appmagic.publishers",
-            payload=json.dumps(
-                {
-                    "company": company,
-                    "publishers": pubs_payload.get("publishers", pubs_payload),
-                }
-            ).encode(),
+            payload=json.dumps({"company": company, "publishers": publishers}).encode(),
             fetched_at=fetched_at,
         )
 
-        # 3) ----- Apps --------------------------------------------------- #
-        # (We de‑duplicate because many publishers repeat across companies.)
-        seen_up_ids: set[int] = set()
-        for pub in pubs_payload.get("publishers", pubs_payload):
-            up_id = pub["id"]
-            if up_id in seen_up_ids:
+        # 3 – per publisher -------------------------------------------
+        seen: Set[int] = set()
+        for pub in publishers:
+            up_id = pub.get("id")
+            if not up_id or up_id in seen:
                 continue
-            seen_up_ids.add(up_id)
+            seen.add(up_id)
 
-            apps_payload = await self._http.get_json(
-                self.URL_APPS_BY_PUBLISHER.format(up_id=up_id),
-                params={"page": 1, "pageSize": 500},
+            # apps list
+            apps_payload = await self._safe_get_json(
+                self._URL_APPS.format(up_id=up_id), params={"page": 1, "pageSize": 500}
             )
+            apps = apps_payload.get("applications", [])
             yield RawItem(
                 source="appmagic.apps",
-                payload=json.dumps(
-                    {
-                        "up_id": up_id,
-                        "company": company,
-                        "apps": apps_payload.get("applications", apps_payload),
-                    }
-                ).encode(),
+                payload=json.dumps({"up_id": up_id, "company": company, "apps": apps}).encode(),
                 fetched_at=fetched_at,
             )
 
-            # 4) Optionally snapshot metrics for every app
-            for app in apps_payload.get("applications", apps_payload):
-                ua_id = app["id"]
-                try:
-                    metrics_payload = await self._http.get_json(
-                        self.URL_METRICS_BY_APP.format(ua_id=ua_id)
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    logger.debug("No metrics for app %s: %s", ua_id, exc)
+            # app metrics
+            for app in apps:
+                ua_id = app.get("id")
+                if not ua_id:
                     continue
+                snap = await self._safe_get_json(self._URL_METRICS.format(ua_id=ua_id))
+                if snap:
+                    yield RawItem(
+                        source="appmagic.app.metrics",
+                        payload=json.dumps({"ua_id": ua_id, "snapshot": snap}).encode(),
+                        fetched_at=fetched_at,
+                    )
 
+            # country metrics
+            ctry_payload = await self._safe_get_json(
+                self._URL_COUNTRIES, params={"united_publisher_id": up_id}
+            )
+            if ctry_payload:
                 yield RawItem(
-                    source="appmagic.app.metrics",
+                    source="appmagic.publisher.country.metrics",
                     payload=json.dumps(
-                        {
-                            "ua_id": ua_id,
-                            "snapshot": metrics_payload,
-                        }
+                        {"united_publisher_id": up_id, "countries": ctry_payload}
                     ).encode(),
                     fetched_at=fetched_at,
                 )
+
+            # HTML page
+            for acc in pub.get("accounts", []):
+                s = acc.get("storeId") or acc.get("store") or store_id
+                pid = acc.get("publisherId") or acc.get("store_publisher_id")
+                if not pid:
+                    continue
+                url = construct_html_url(pub.get("name", ""), s, pid)
+                html = await self._safe_get_text(url)
+                if html:
+                    yield RawItem(
+                        source="appmagic.html",
+                        payload=json.dumps(
+                            {
+                                "up_id": up_id,
+                                "store": s,
+                                "store_publisher_id": pid,
+                                "html_url": url,
+                                "html": html,
+                            }
+                        ).encode(),
+                        fetched_at=fetched_at,
+                    )
+
+    # ------------------------------------------------------------------- #
+    @staticmethod
+    def _extract_publishers(payload: Dict[str, Any]) -> List[dict]:
+        if "publishers" in payload:
+            return payload["publishers"]
+        if "data" in payload:
+            return payload["data"]
+        if "result" in payload:
+            return payload["result"]
+        return []
+
+
+# ---------- expose the class as appmagic.AppMagicFetcher ----------------
+import sys as _sys  # noqa: E402
+
+_pkg = _sys.modules.get(__name__.rsplit(".", 1)[0])
+if _pkg is not None:
+    setattr(_pkg, "AppMagicFetcher", AppMagicFetcher)

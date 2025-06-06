@@ -2,20 +2,20 @@ pipelines:
   # FI Short Interest - Aggregate data pipeline with diff detection
   # Runs every 10 minutes
   fi_shortinterest_agg:
-  schedule:
-    interval:
-      minutes: 10  # Every 10 minutes
-  chain:
-    - class: fi_shortinterest.FiFetcher
-      kwargs: {}
-    - class: fi_shortinterest.FiAggParser
-      kwargs: {}
-    - class: fi_shortinterest.DiffParser
-      kwargs:
-        db_path: "fi_shortinterest.db"
-    - class: fi_shortinterest.DatabaseSink
-      kwargs:
-        db_path: "fi_shortinterest.db"
+    schedule:
+      interval:
+        minutes: 10  # Every 10 minutes
+    chain:
+      - class: fi_shortinterest.FiFetcher
+        kwargs: {}
+      - class: fi_shortinterest.FiAggParser
+        kwargs: {}
+      - class: fi_shortinterest.DiffParser
+        kwargs:
+          db_path: "fi_shortinterest.db"
+      - class: fi_shortinterest.DatabaseSink
+        kwargs:
+          db_path: "fi_shortinterest.db"
 
   # FI Short Interest - Position data pipeline with diff detection
   # Runs every 10 minutes
@@ -38,40 +38,48 @@ pipelines:
   # TCGPlayer - Pokemon sets CSV data pipeline
   # Runs at 9 PM every day
   tcgplayer_pokemon_sets:
-  schedule:
-    cron: "0 21 * * *"  # Daily at 9 PM (21:00)
-  chain:
-    - class: tcgplayer.PokemonSetsCsvFetcher
-      kwargs:
-        csv_path: "development/tcg/pokemon_sets.csv"
-    - class: tcgplayer.PokemonSetsParser
-    - class: tcgplayer.TcgDatabaseSink
-      kwargs:
-        db_path: "tcg.db"
+    schedule:
+      cron: "0 21 * * *"  # Daily at 9 PM (21:00)
+    chain:
+      - class: tcgplayer.PokemonSetsCsvFetcher
+        kwargs:
+          csv_path: "development/tcg/pokemon_sets.csv"
+      - class: tcgplayer.PokemonSetsParser
+      - class: tcgplayer.TcgDatabaseSink
+        kwargs:
+          db_path: "tcg.db"
 
   # TCGPlayer - Price history data pipeline
   # Runs at 9 PM every day
   tcgplayer_price_history:
-  schedule:
-    cron: "0 21 * * *"  # Daily at 9 PM (21:00)
-  chain:
-    - class: tcgplayer.TcgPlayerPriceHistoryFetcher
-      kwargs:
-        db_path: "tcg.db"
-        delay_seconds: 2.0
-    - class: tcgplayer.PriceHistoryParser
-    - class: tcgplayer.TcgDatabaseSink
-      kwargs:
-        db_path: "tcg.db"
-
-pipelines:
-  - name: appmagic_companies
     schedule:
-      interval: { minutes: 1 }          # every six hours
-    stages:
-      - "core.plugins.appmagic.fetcher.AppMagicFetcher":
+      cron: "0 21 * * *"  # Daily at 9 PM (21:00)
+    chain:
+      - class: tcgplayer.TcgPlayerPriceHistoryFetcher
+        kwargs:
+          db_path: "tcg.db"
+          delay_seconds: 2.0
+      - class: tcgplayer.PriceHistoryParser
+      - class: tcgplayer.TcgDatabaseSink
+        kwargs:
+          db_path: "tcg.db"
+
+  # AppMagic - Companies data pipeline
+  # Runs every minute
+  appmagic_companies:
+    schedule:
+      interval:
+        minutes: 1
+    chain:
+      - class: appmagic.AppMagicFetcher
+        kwargs:
           companies:
-            - { name: "Big Blue Bubble", ticker: "EG7", store: 1, store_publisher_id: "6388759014800755560" }
-      - "core.plugins.appmagic.parser.AppMagicParser": {}
-      - "core.plugins.appmagic.sinks.AppMagicSink":
+            - name: "Big Blue Bubble"
+              ticker: "EG7"
+              store: 1
+              store_publisher_id: "6388759014800755560"
+      - class: appmagic.AppMagicParser
+        kwargs: {}
+      - class: appmagic.AppMagicSink
+        kwargs:
           db_path: "mobile_analytics.db"

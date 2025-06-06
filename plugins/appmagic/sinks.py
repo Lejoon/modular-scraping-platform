@@ -1,14 +1,18 @@
-# core/plugins/appmagic/sinks.py
-"""Database sink for everything parsed from AppMagic.
+# plugins/appmagic/sinks.py
+"""
+AppMagicSink
+============
 
-It upserts into the seven tables that make up the *core reference
-schema* for the analytics DB.
+• Creates every required table on first use (SQLite: CREATE TABLE IF NOT EXISTS).
+• Implements the abstract `handle()` method expected by core.interfaces.Sink.
+• Upserts rows according to the ParsedItem → table mapping.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, AsyncIterator, Dict, List
+from pathlib import Path
+from typing import Any, Dict, List
 
 from core.interfaces import Sink
 from core.models import ParsedItem
@@ -18,15 +22,123 @@ logger = logging.getLogger(__name__)
 
 
 class AppMagicSink(Sink):
-    """Upserts ParsedItems into SQLite, auto‑creating tables if needed."""
-
+    # ------------------------------------------------------------------ #
     name = "AppMagicSink"
 
-    # ------------------------------------------------------------------- #
-    # Mapping: ParsedItem.topic -> table meta
-    # ------------------------------------------------------------------- #
+    # ------------------------------ DDL ------------------------------- #
+    _DDL: Dict[str, str] = {
+        # reference tables ---------------------------------------------
+        "Countries": """
+CREATE TABLE IF NOT EXISTS Countries (
+    country_code TEXT PRIMARY KEY,
+    country_name TEXT,
+    first_seen_at DATETIME,
+    last_updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+""",
+        "PublisherGroups": """
+CREATE TABLE IF NOT EXISTS PublisherGroups (
+    group_id INTEGER PRIMARY KEY,
+    group_name TEXT,
+    discovered_in_ticker TEXT,
+    first_seen_at DATETIME,
+    last_updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+""",
+        # publisher hierarchy ------------------------------------------
+        "UnitedPublishers": """
+CREATE TABLE IF NOT EXISTS UnitedPublishers (
+    united_publisher_id INTEGER PRIMARY KEY,
+    name TEXT,
+    headquarter_country_code TEXT,
+    linkedin_headcount INTEGER,
+    min_release_date DATE,
+    first_app_ad_date DATE,
+    group_id INTEGER,
+    first_seen_at DATETIME,
+    last_updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+""",
+        "StoreSpecificPublisherAccounts": """
+CREATE TABLE IF NOT EXISTS StoreSpecificPublisherAccounts (
+    store_id INTEGER,
+    store_publisher_id TEXT,
+    united_publisher_id INTEGER,
+    group_id INTEGER,
+    html_url TEXT,
+    icon_url TEXT,
+    first_seen_at DATETIME,
+    last_updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (store_id, store_publisher_id)
+);
+""",
+        # apps ---------------------------------------------------------
+        "UnitedApplications": """
+CREATE TABLE IF NOT EXISTS UnitedApplications (
+    united_application_id INTEGER PRIMARY KEY,
+    united_publisher_id INTEGER,
+    name TEXT,
+    icon_url TEXT,
+    release_date DATE,
+    contains_ads BOOLEAN,
+    has_in_app_purchases BOOLEAN,
+    first_seen_at DATETIME,
+    last_updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+""",
+        "StoreSpecificApplications": """
+CREATE TABLE IF NOT EXISTS StoreSpecificApplications (
+    store_id INTEGER,
+    store_app_id_text TEXT,
+    united_application_id INTEGER,
+    name_on_store TEXT,
+    store_url TEXT,
+    first_seen_at DATETIME,
+    last_updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (store_id, store_app_id_text)
+);
+""",
+        "ApplicationSnapshotMetrics": """
+CREATE TABLE IF NOT EXISTS ApplicationSnapshotMetrics (
+    scrape_date DATE,
+    united_application_id INTEGER,
+    snapshot_30d_downloads INTEGER,
+    snapshot_30d_revenue REAL,
+    snapshot_lifetime_downloads INTEGER,
+    snapshot_lifetime_revenue REAL,
+    PRIMARY KEY (scrape_date, united_application_id)
+);
+""",
+        "ApplicationTagsLink": """
+CREATE TABLE IF NOT EXISTS ApplicationTagsLink (
+    united_application_id INTEGER,
+    tag_id TEXT,
+    first_associated_at DATETIME,
+    PRIMARY KEY (united_application_id, tag_id)
+);
+""",
+        # NEW table ----------------------------------------------------
+        "PublisherCountryMetrics": """
+CREATE TABLE IF NOT EXISTS PublisherCountryMetrics (
+    scrape_date DATE,
+    united_publisher_id INTEGER,
+    country_code TEXT,
+    metric_timespan TEXT CHECK(metric_timespan IN ('Last30Days','Lifetime')),
+    revenue REAL,
+    downloads INTEGER,
+    revenue_percent REAL,
+    downloads_percent REAL,
+    PRIMARY KEY (scrape_date,
+                 united_publisher_id,
+                 country_code,
+                 metric_timespan)
+);
+""",
+    }
 
+    # ---------------------------- mapping ---------------------------- #
     _TOPIC_CFG: Dict[str, Dict[str, Any]] = {
+        # reference
         "country": {
             "table": "Countries",
             "pk": ["country_code"],
@@ -35,8 +147,9 @@ class AppMagicSink(Sink):
         "appmagic.group": {
             "table": "PublisherGroups",
             "pk": ["group_id"],
-            "cols": ["group_id", "group_name", "discovered_in_ticker", "first_seen_at", "last_updated_at"],
+            "cols": ["group_id", "group_name", "discovered_in_ticker", "first_seen_at"],
         },
+        # publishers
         "appmagic.publisher": {
             "table": "UnitedPublishers",
             "pk": ["united_publisher_id"],
@@ -49,7 +162,6 @@ class AppMagicSink(Sink):
                 "first_app_ad_date",
                 "group_id",
                 "first_seen_at",
-                "last_updated_at",
             ],
         },
         "appmagic.publisher.account": {
@@ -61,23 +173,23 @@ class AppMagicSink(Sink):
                 "united_publisher_id",
                 "group_id",
                 "html_url",
+                "icon_url",
                 "first_seen_at",
-                "last_updated_at",
             ],
         },
+        # apps
         "appmagic.application": {
             "table": "UnitedApplications",
             "pk": ["united_application_id"],
             "cols": [
                 "united_application_id",
-                "name",
                 "united_publisher_id",
+                "name",
                 "icon_url",
                 "release_date",
                 "contains_ads",
                 "has_in_app_purchases",
                 "first_seen_at",
-                "last_updated_at",
             ],
         },
         "appmagic.application.store": {
@@ -90,7 +202,6 @@ class AppMagicSink(Sink):
                 "name_on_store",
                 "store_url",
                 "first_seen_at",
-                "last_updated_at",
             ],
         },
         "appmagic.application.metrics": {
@@ -108,195 +219,91 @@ class AppMagicSink(Sink):
         "appmagic.application.tag_link": {
             "table": "ApplicationTagsLink",
             "pk": ["united_application_id", "tag_id"],
+            "cols": ["united_application_id", "tag_id", "first_associated_at"],
+        },
+        # publisher country metrics
+        "appmagic.publisher.country.metrics": {
+            "table": "PublisherCountryMetrics",
+            "pk": [
+                "scrape_date",
+                "united_publisher_id",
+                "country_code",
+                "metric_timespan",
+            ],
             "cols": [
-                "united_application_id",
-                "tag_id",
-                "first_associated_at",
+                "scrape_date",
+                "united_publisher_id",
+                "country_code",
+                "metric_timespan",
+                "revenue",
+                "downloads",
+                "revenue_percent",
+                "downloads_percent",
             ],
         },
     }
 
-    # ------------------------------------------------------------------- #
-
-    def __init__(self, db_path: str = "mobile_analytics.db", **kwargs) -> None:
+    # ------------------------------------------------------------------ #
+    def __init__(self, db_path: str | Path = "mobile_analytics.db", **_) -> None:
         self.db = Database(db_path=db_path)
+        self._ddl_executed = False  # run once lazily
 
-    # ------------------------------------------------------------------- #
-    # Transform interface
-    # ------------------------------------------------------------------- #
+    # ------------------------------------------------------------------ #
+    async def handle(self, item: ParsedItem) -> None:  # abstract method ✓
+        """Upsert a single ParsedItem."""
+        # Lazily create tables on the first ever insert
+        if not self._ddl_executed:
+            await self._create_all_tables()
+            self._ddl_executed = True
 
-    async def __call__(self, items: AsyncIterator[Any]) -> AsyncIterator[None]:  # type: ignore[override]
-        async for item in items:
-            if isinstance(item, ParsedItem):
-                await self.handle(item)
-            yield None  # Sinks are typically terminal
-
-    async def handle(self, item: ParsedItem) -> None:
         cfg = self._TOPIC_CFG.get(item.topic)
-        if cfg is None:
-            logger.debug("Sink ignoring topic %s", item.topic)
+        if cfg is None:  # unknown topic – just ignore
+            logger.debug("No sink rule for topic %s", item.topic)
             return
 
         await self._upsert(cfg["table"], cfg["pk"], cfg["cols"], item.content)
 
-    # ------------------------------------------------------------------- #
-    # Upsert helpers
-    # ------------------------------------------------------------------- #
+    # ------------------------------------------------------------------ #
+    async def __call__(self, stream):
+        async for itm in stream:
+            if isinstance(itm, ParsedItem):
+                await self.handle(itm)
+            yield None  # sink is terminal but keeps the pipeline contract
 
-    async def _upsert(self, table: str, pk: List[str], cols: List[str], row: Dict[str, Any]) -> None:
-        placeholders = ", ".join([f":{c}" for c in cols])
+    # ------------------------------------------------------------------ #
+    async def _create_all_tables(self) -> None:
+        for ddl in self._DDL.values():
+            await self.db.execute(ddl)
+
+    # ------------------------------------------------------------------ #
+    async def _upsert(
+        self, table: str, pk: List[str], cols: List[str], row: Dict[str, Any]
+    ) -> None:
+        actual_cols, plch = [], []
+        for c in cols:
+            if c in row:
+                actual_cols.append(c)
+                plch.append(f":{c}")
+
         pk_clause = ", ".join(pk)
-        update_set = ", ".join([f"{c}=excluded.{c}" for c in cols if c not in pk])
-
-        # Auto‑update *last_updated_at* whenever non‑PK column changes
-        set_last_updated = "last_updated_at=CURRENT_TIMESTAMP" if "last_updated_at" in cols else ""
-        if set_last_updated and update_set:
-            update_set = f"{update_set}, {set_last_updated}"
-        elif set_last_updated:
-            update_set = set_last_updated
+        update_set = ", ".join(
+            f"{c}=excluded.{c}"
+            for c in actual_cols
+            if c not in pk  # don't update primary-key columns
+        )
 
         sql = f"""
-            INSERT INTO {table} ({', '.join(cols)})
-            VALUES ({placeholders})
-            ON CONFLICT ({pk_clause}) DO UPDATE SET
-            {update_set}
-        """
+INSERT INTO {table} ({', '.join(actual_cols)})
+VALUES ({', '.join(plch)})
+ON CONFLICT ({pk_clause}) DO UPDATE SET {update_set};
+"""
         await self.db.execute(sql, row)
 
-    # ------------------------------------------------------------------- #
-    # Lifecycle helpers
-    # ------------------------------------------------------------------- #
 
-    async def __aenter__(self):
-        await self.db.connect()
-        await self._create_tables()
-        return self
+# ----------------------------------------------------------------------- #
+# Make class discoverable as `appmagic.AppMagicSink`
+import sys as _sys  # noqa: E402
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await self.db.close()
-
-    # ------------------------------------------------------------------- #
-    # Table bootstrap
-    # ------------------------------------------------------------------- #
-
-    async def _create_tables(self) -> None:
-        """CREATE TABLE IF NOT EXISTS … for all relevant entities."""
-
-        # Definitions lifted verbatim from *db_setup.py*, trimmed to only the
-        # tables required for this plugin (plus minimal *Stores* / *Tags* to
-        # satisfy FKs).
-        ddl_statements = [
-            """
-            CREATE TABLE IF NOT EXISTS Countries (
-                country_code TEXT PRIMARY KEY,
-                country_name TEXT,
-                first_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            );
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS PublisherGroups (
-                group_id INTEGER PRIMARY KEY,
-                group_name TEXT NOT NULL UNIQUE,
-                discovered_in_ticker TEXT,
-                first_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                last_updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            );
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS UnitedPublishers (
-                united_publisher_id INTEGER PRIMARY KEY,
-                name TEXT NOT NULL,
-                headquarter_country_code TEXT,
-                linkedin_headcount INTEGER,
-                min_release_date TEXT,
-                first_app_ad_date TEXT,
-                group_id INTEGER,
-                first_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                last_updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (headquarter_country_code) REFERENCES Countries(country_code),
-                FOREIGN KEY (group_id) REFERENCES PublisherGroups(group_id)
-            );
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS StoreSpecificPublisherAccounts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                store_id INTEGER NOT NULL,
-                store_publisher_id TEXT NOT NULL,
-                united_publisher_id INTEGER NOT NULL,
-                group_id INTEGER,
-                html_url TEXT,
-                first_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                last_updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (united_publisher_id) REFERENCES UnitedPublishers(united_publisher_id),
-                FOREIGN KEY (group_id) REFERENCES PublisherGroups(group_id),
-                UNIQUE (store_id, store_publisher_id)
-            );
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS UnitedApplications (
-                united_application_id INTEGER PRIMARY KEY,
-                name TEXT NOT NULL,
-                united_publisher_id INTEGER NOT NULL,
-                icon_url TEXT,
-                release_date TEXT,
-                contains_ads BOOLEAN,
-                has_in_app_purchases BOOLEAN,
-                first_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                last_updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (united_publisher_id) REFERENCES UnitedPublishers(united_publisher_id)
-            );
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS ApplicationSnapshotMetrics (
-                scrape_date DATE NOT NULL,
-                united_application_id INTEGER NOT NULL,
-                snapshot_30d_downloads REAL,
-                snapshot_30d_revenue REAL,
-                snapshot_lifetime_downloads REAL,
-                snapshot_lifetime_revenue REAL,
-                PRIMARY KEY (scrape_date, united_application_id),
-                FOREIGN KEY (united_application_id) REFERENCES UnitedApplications(united_application_id)
-            );
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS StoreSpecificApplications (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                store_id INTEGER NOT NULL,
-                store_app_id_text TEXT NOT NULL,
-                united_application_id INTEGER NOT NULL,
-                name_on_store TEXT,
-                store_url TEXT,
-                first_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                last_updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (united_application_id) REFERENCES UnitedApplications(united_application_id),
-                UNIQUE (store_id, store_app_id_text)
-            );
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS Tags (
-                tag_id INTEGER PRIMARY KEY,
-                tag_name TEXT NOT NULL
-            );
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS ApplicationTagsLink (
-                united_application_id INTEGER NOT NULL,
-                tag_id INTEGER NOT NULL,
-                first_associated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (united_application_id, tag_id),
-                FOREIGN KEY (united_application_id) REFERENCES UnitedApplications(united_application_id),
-                FOREIGN KEY (tag_id) REFERENCES Tags(tag_id)
-            );
-            """,
-            # Minimal Stores (only id) – enough to satisfy FK, the full
-            # *store* catalogue lives elsewhere.
-            """
-            CREATE TABLE IF NOT EXISTS Stores (
-                store_id INTEGER PRIMARY KEY,
-                store_name TEXT
-            );
-            """,
-        ]
-
-        for ddl in ddl_statements:
-            await self.db.execute(ddl)
+_pkg = _sys.modules.get(__name__.rsplit(".", 1)[0])
+if _pkg:
+    setattr(_pkg, "AppMagicSink", AppMagicSink)

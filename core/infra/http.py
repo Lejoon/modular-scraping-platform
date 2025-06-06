@@ -64,6 +64,25 @@ class HttpClient:
                 logger.warning(f"GET {url} failed (attempt {attempt + 1}), retrying in {delay}s: {e}")
                 await asyncio.sleep(delay)
 
+    async def get_json(self, url: str, **kwargs) -> Dict[str, Any]:
+        """GET request returning JSON content with retry logic."""
+        session = await self._get_session()
+        
+        for attempt in range(self._max_retries):
+            try:
+                timeout = aiohttp.ClientTimeout(total=self._timeout)
+                async with session.get(url, timeout=timeout, **kwargs) as response:
+                    response.raise_for_status()
+                    return await response.json()
+            except Exception as e:
+                if attempt == self._max_retries - 1:
+                    logger.error(f"Failed to GET {url} after {self._max_retries} attempts: {e}")
+                    raise
+                
+                delay = min(self._base_delay * (2 ** attempt), self._max_delay)
+                logger.warning(f"GET {url} failed (attempt {attempt + 1}), retrying in {delay}s: {e}")
+                await asyncio.sleep(delay)
+
     async def get_bytes(self, url: str, **kwargs) -> bytes:
         """GET request returning binary content with retry logic."""
         session = await self._get_session()

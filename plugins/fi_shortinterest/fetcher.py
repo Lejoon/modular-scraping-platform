@@ -30,6 +30,14 @@ class FiFetcher(Fetcher):
         self.http = HttpClient(**kwargs)
         self._last_seen: Optional[str] = None
 
+    async def __aenter__(self):
+        """Async context manager entry."""
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit - ensure HttpClient session is closed."""
+        await self.http.close()
+
     async def fetch(self) -> AsyncIterator[RawItem]:
         """Fetch FI short interest data - single poll, no infinite loop."""
         try:
@@ -65,5 +73,3 @@ class FiFetcher(Fetcher):
         except Exception as e:
             logger.error(f"Failed to fetch FI data: {e}")
             # Don't re-raise to allow scheduler to continue
-        finally:
-            await self.http.close()

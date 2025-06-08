@@ -630,72 +630,249 @@ def _handler_publisher_apps_api(obj: Dict[str, Any]) -> List[ParsedItem]:
     return out
 
 
+def extract_app_data(app_row):
+    """
+    Extract app data from a single app row element.
+    
+    Args:
+        app_row: BeautifulSoup element representing an app row
+        
+    Returns:
+        dict: App data with all relevant fields
+    """
+    app_data = {
+        "name": "N/A",
+        "appmagic_id_path": "N/A", 
+        "store_specific_id": "N/A",
+        "genres": [],
+        "countries": 0,
+        "first_release": "N/A",
+        "lifetime_revenue_str": "N/A",
+        "lifetime_revenue_val": 0,
+        "lifetime_downloads_str": "N/A",
+        "lifetime_downloads_val": 0,
+    }
+    
+    # Extract app name and IDs
+    name_anchor = app_row.select_one('div.col-1 app-name-stores a.g-app-name')
+    if name_anchor:
+        app_data["name"] = name_anchor.get_text(strip=True)
+        href = name_anchor.get('href')
+        if href:
+            app_data["appmagic_id_path"] = href
+            parts = href.strip('/').split('/')
+            if len(parts) > 0: 
+                app_data["store_specific_id"] = parts[-1]
+    
+    # Extract genres
+    genre_tags_container = app_row.select_one('div.col-2 div.tags-wrap')
+    if genre_tags_container:
+        no_value_genre = genre_tags_container.select_one('div.no-value')
+        if not no_value_genre or no_value_genre.get_text(strip=True) not in ["-", "—"]:  # Check for both
+            genre_spans = genre_tags_container.select('div.tag span.text-overflow')
+            app_data["genres"] = [span.get_text(strip=True) for span in genre_spans if span.get_text(strip=True)]
+
+    # Extract countries count
+    countries_span = app_row.select_one('div.col-3 span.dashed')
+    if countries_span:
+        try: 
+            app_data["countries"] = int(countries_span.get_text(strip=True))
+        except ValueError: 
+            app_data["countries"] = 0
+    
+    # Extract release date
+    release_date_span = app_row.select_one('div.col-4 app-release-date span.release-date span')
+    if release_date_span: 
+        app_data["first_release"] = release_date_span.get_text(strip=True)
+
+    # Extract revenue data
+    revenue_div = app_row.select_one('div.col-5')
+    if revenue_div:
+        text_nodes = [node.strip() for node in revenue_div.find_all(string=True, recursive=False) if node.strip()]
+        if text_nodes:
+            revenue_str = text_nodes[0]
+            # Convert em dash to regular dash for better readability
+            if revenue_str == "—":
+                revenue_str = "-"
+            app_data["lifetime_revenue_str"] = revenue_str
+            app_data["lifetime_revenue_val"] = parse_appmagic_metric(revenue_str)
+    
+    # Extract downloads data
+    downloads_div = app_row.select_one('div.col-6')
+    if downloads_div:
+        text_nodes = [node.strip() for node in downloads_div.find_all(string=True, recursive=False) if node.strip()]
+        if text_nodes:
+            downloads_str = text_nodes[0]
+            # Convert em dash to regular dash for better readability
+            if downloads_str == "—":
+                downloads_str = "-"
+            app_data["lifetime_downloads_str"] = downloads_str
+            app_data["lifetime_downloads_val"] = parse_appmagic_metric(downloads_str)
+    
+    return app_data
+
+
+def extract_publisher_info(soup):
+    """
+    Extract publisher information from the page.
+    
+    Args:
+        soup: BeautifulSoup object of the entire page
+        
+    Returns:
+        dict: Publisher information
+    """
+    publisher_info = {
+        "name": "N/A",
+        "total_apps": 0,
+        "total_downloads": "N/A",
+        "total_revenue": "N/A"
+    }
+    
+    # Try to extract publisher name from page title or header
+    title_elem = soup.find('title')
+    if title_elem:
+        title_text = title_elem.get_text(strip=True)
+        # Publisher name is often in the title like "Publisher Name - AppMagic"
+        if " - " in title_text:
+            publisher_info["name"] = title_text.split(" - ")[0].strip()
+    
+    # Try to extract publisher stats if available
+    stats_container = soup.select_one('.publisher-stats, .stats-container')
+    if stats_container:
+        # Look for total apps count
+        apps_stat = stats_container.find(text=re.compile(r'\d+\s*apps?', re.I))
+        if apps_stat:
+            match = re.search(r'(\d+)', apps_stat)
+            if match:
+                publisher_info["total_apps"] = int(match.group(1))
+    
+    return publisher_info
+
+
+def parse_publisher_page_html(html_content):
+    """
+    Parse AppMagic publisher page HTML to extract structured data.
+    
+    Args:
+        html_content (str): Raw HTML content from the publisher page
+        
+    Returns:
+        dict: Structured data with keys:
+            - publisher_info: Publisher metadata
+            - apps: List of app data dictionaries
+    """
+    soup = BeautifulSoup(html_content, 'html.parser')
+    
+    # Extract publisher information
+    publisher_info = extract_publisher_info(soup)
+    
+    # Extract apps data
+    apps_data_list = []
+    app_rows_container = soup.select_one('div.table.ng-star-inserted')
+    
+    if not app_rows_container:
+        logger.debug("Warning: Could not find the main app table container.")
+        return {"publisher_info": publisher_info, "apps": apps_data_list}
+        
+    app_rows = app_rows_container.find_all('publisher-app-row', class_='g-item', recursive=False)
+    if not app_rows:
+        logger.debug("Warning: No app rows found within the table container.")
+        return {"publisher_info": publisher_info, "apps": apps_data_list}
+
+    for row in app_rows:
+        app_data = extract_app_data(row)
+        apps_data_list.append(app_data)
+    
+    return {"publisher_info": publisher_info, "apps": apps_data_list}
+
+
 def _handler_publisher_html(obj: Dict[str, Any]) -> List[ParsedItem]:
-    """Enhanced HTML parser that extracts app rows from publisher pages."""
+    """Enhanced HTML parser that extracts app rows from publisher pages using sophisticated selectors."""
     out: List[ParsedItem] = []
     up_id = obj.get("up_id")
     html_content = obj.get("html", "")
     
     if not html_content:
         return out
+    
+    logger.debug(f"Parsing HTML content for publisher {up_id}: {len(html_content)} characters")
+    
+    try:
+        # Use the sophisticated parser
+        parsed_data = parse_publisher_page_html(html_content)
+        publisher_info = parsed_data["publisher_info"]
+        apps_data = parsed_data["apps"]
         
-    soup = BeautifulSoup(html_content, "html.parser")
-    
-    # Look for app rows in the HTML structure
-    # This depends on AppMagic's HTML structure - adjust selectors as needed
-    app_rows = soup.find_all("tr", class_=lambda x: x and "app-row" in x) or \
-               soup.find_all("div", class_=lambda x: x and "app-item" in x) or \
-               soup.select(".app-list tr") or \
-               soup.select("[data-app-id]")
-    
-    for row in app_rows:
-        try:
-            # Extract basic app info
-            name_elem = row.find("a", class_="app-name") or row.find(".app-title") or row.find("td", class_="name")
-            icon_elem = row.find("img", src=True)
+        logger.debug(f"Found {len(apps_data)} apps for publisher {up_id}")
+        
+        # Convert each app to a ParsedItem
+        for app_data in apps_data:
+            # Enhance with united_publisher_id and timestamp
+            enhanced_app_data = {
+                **app_data,
+                "united_publisher_id": up_id,
+                "first_seen_at": datetime.utcnow().isoformat(),
+                "publisher_name": publisher_info.get("name", "N/A")
+            }
             
-            # Extract metrics
-            downloads_elem = row.find(text=re.compile(r'\d+[KMB]?\s*(downloads?|DL)', re.I))
-            revenue_elem = row.find(text=re.compile(r'\$\d+[KMB]?', re.I))
-            release_date_elem = row.find(text=re.compile(r'\w{3}\s+\d{1,2},\s+\d{4}'))
+            # Try to extract united_application_id from href if available
+            if app_data.get("appmagic_id_path"):
+                ua_id = extract_united_application_id_from_href(app_data["appmagic_id_path"])
+                if ua_id:
+                    enhanced_app_data["united_application_id"] = ua_id
             
-            # Try to extract united_application_id from href
-            ua_id = None
-            if name_elem and name_elem.get("href"):
-                ua_id = extract_united_application_id_from_href(name_elem["href"])
+            out.append(
+                ParsedItem(
+                    topic="appmagic.publisher_html",
+                    content=enhanced_app_data
+                )
+            )
+        
+        # Also create a publisher info item
+        if publisher_info["name"] != "N/A":
+            publisher_data = {
+                **publisher_info,
+                "united_publisher_id": up_id,
+                "apps_count": len(apps_data),
+                "parsed_at": datetime.utcnow().isoformat()
+            }
             
-            # Parse values
-            name = name_elem.get_text(strip=True) if name_elem else None
-            icon_url = icon_elem["src"] if icon_elem else None
+            out.append(
+                ParsedItem(
+                    topic="appmagic.publisher_info",
+                    content=publisher_data
+                )
+            )
             
-            lifetime_downloads_val = parse_appmagic_metric(downloads_elem) if downloads_elem else None
-            lifetime_revenue_val = parse_appmagic_metric(revenue_elem) if revenue_elem else None
-            release_date = parse_release_date(release_date_elem) if release_date_elem else None
+    except Exception as e:
+        logger.warning(f"Error parsing HTML for publisher {up_id}: {e}")
+        # Fallback to basic parsing
+        soup = BeautifulSoup(html_content, "html.parser")
+        
+        # Look for any app-related content as fallback
+        app_links = soup.find_all("a", href=re.compile(r'/app/'))
+        logger.debug(f"Fallback parser found {len(app_links)} potential app links")
+        
+        for link in app_links:
+            name = link.get_text(strip=True)
+            href = link.get("href", "")
             
-            if name:  # Only process if we have a name
-                app_data = {
+            if name and href:
+                fallback_data = {
                     "united_publisher_id": up_id,
                     "name": name,
-                    "icon_url": icon_url,
-                    "release_date": release_date,
-                    "lifetime_downloads_val": lifetime_downloads_val,
-                    "lifetime_revenue_val": lifetime_revenue_val,
+                    "appmagic_id_path": href,
                     "first_seen_at": datetime.utcnow().isoformat(),
+                    "parsing_method": "fallback"
                 }
                 
-                if ua_id:
-                    app_data["united_application_id"] = ua_id
-                    
                 out.append(
                     ParsedItem(
                         topic="appmagic.publisher_html",
-                        content=app_data
+                        content=fallback_data
                     )
                 )
-                
-        except (AttributeError, ValueError) as e:
-            logger.debug(f"Error parsing app row: {e}")
-            continue
     
     return out
 

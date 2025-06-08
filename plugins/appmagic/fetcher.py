@@ -19,6 +19,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Set
 from core.interfaces import Fetcher
 from core.models import RawItem
 from core.infra.http import HttpClient
+from core.infra.sel import PlaywrightClient
 
 logger = logging.getLogger(__name__)
 
@@ -59,21 +60,34 @@ class AppMagicFetcher(Fetcher):
         http: Optional[HttpClient] = None,
         include_apps: bool = True,
         include_country_split: bool = False,
+        use_javascript_renderer: bool = True,
     ) -> None:
         self._companies = companies
         self._rl = rate_limit_s
         self._http = http or HttpClient(max_retries=max_retries)
         self._include_apps = include_apps
         self._include_country_split = include_country_split
+        self._use_js_renderer = use_javascript_renderer
+        self._playwright_client: Optional[PlaywrightClient] = None
  #------------------------------------------------------------------- #
     # Async context manager for proper resource cleanup
     # ------------------------------------------------------------------- #
     async def __aenter__(self):
         """Async context manager entry."""
+        if self._use_js_renderer:
+            self._playwright_client = PlaywrightClient(
+                headless=True,
+                stealth=True,
+                timeout=30_000
+            )
+            await self._playwright_client.start()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Async context manager exit - ensure HttpClient session is closed."""
+        """Async context manager exit - ensure HttpClient and PlaywrightClient sessions are closed."""
+        if self._playwright_client:
+            await self._playwright_client.stop()
+            self._playwright_client = None
         if hasattr(self._http, 'close'):
             await self._http.close()
 
@@ -130,6 +144,30 @@ class AppMagicFetcher(Fetcher):
         except Exception as exc:  # noqa: BLE001
             logger.debug("GET(text) %s failed: %s", url, exc)
             return ""
+
+    async def _safe_get_html_with_js(self, url: str, wait_for_selector: Optional[str] = None) -> str:
+        """
+        Fetch HTML content with JavaScript rendering using Playwright.
+        
+        Args:
+            url: URL to fetch
+            wait_for_selector: Optional CSS selector to wait for before extracting content
+            
+        Returns:
+            Rendered HTML content or empty string on error
+        """
+        if not self._playwright_client:
+            logger.warning("Playwright client not available, falling back to simple HTTP")
+            return await self._safe_get_text(url)
+            
+        try:
+            logger.debug(f"Fetching JavaScript-rendered content from: {url}")
+            html = await self._playwright_client.get_page_content(url, wait_for_selector)
+            logger.debug(f"Successfully rendered HTML: {len(html)} characters")
+            return html
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("JavaScript rendering failed for %s: %s, falling back to simple HTTP", url, exc)
+            return await self._safe_get_text(url)
 
     # ------------------------------------------------------------------- #
     async def fetch(self) -> AsyncIterator[RawItem]:
@@ -235,7 +273,15 @@ class AppMagicFetcher(Fetcher):
                 logger.info(f"Fetching HTML for publisher {pub_name}, store={s}, publisher_id={pid}")
                 url = construct_html_url(pub.get("name", ""), s, pid)
                 logger.debug(f"HTML URL: {url}")
-                html = await self._safe_get_text(url)
+                
+                # Use JavaScript renderer for SPA content if available, otherwise fall back to simple HTTP
+                if self._use_js_renderer:
+                    # Wait for common AppMagic content selectors to ensure the page is loaded
+                    wait_selector = ".publisher-info, .app-card, .stats-card, [data-testid='publisher-stats']"
+                    html = await self._safe_get_html_with_js(url, wait_selector)
+                else:
+                    html = await self._safe_get_text(url)
+                    
                 logger.info(f"HTML fetch result: {len(html) if html else 0} characters")
                 if html:
                     yield RawItem(

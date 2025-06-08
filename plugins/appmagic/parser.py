@@ -385,10 +385,10 @@ def _handler_publishers(obj: Dict[str, Any]) -> List[ParsedItem]:
                 content={
                     "united_publisher_id": p["id"],
                     "name": p.get("name"),
-                    "headquarter_country_code": p.get("countryCode"),
-                    "linkedin_headcount": p.get("linkedinHeadcount"),
-                    "min_release_date": p.get("minReleaseDate"),
-                    "first_app_ad_date": p.get("firstAppAdDate"),
+                    "headquarter_country_code": p.get("headquarter"),  # API uses 'headquarter' not 'countryCode'
+                    "linkedin_headcount": p.get("linkedin_headcount"),  # API uses 'linkedin_headcount' not 'linkedinHeadcount'
+                    "min_release_date": p.get("min_release_date"),  # API uses 'min_release_date' not 'minReleaseDate'
+                    "first_app_ad_date": p.get("first_app_ad"),  # API uses 'first_app_ad' not 'firstAppAdDate'
                     "group_id": p.get("groupId"),
                     "first_seen_at": datetime.utcnow().isoformat(),
                 },

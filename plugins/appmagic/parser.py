@@ -397,17 +397,30 @@ def _handler_publishers(obj: Dict[str, Any]) -> List[ParsedItem]:
 
         # Handle both accounts and publisherIds formats
         accounts_data = p.get("accounts", []) or p.get("publisherIds", [])
+        publisher_group_id = p.get("groupId")  # Get the group_id from the publisher
+        
         for acc in accounts_data:
+            # Extract store and publisher ID from the account object
+            store_id = acc.get("storeId") or acc.get("store")
+            store_publisher_id = acc.get("publisherId") or acc.get("store_publisher_id")
+            
+            # Construct HTML URL using the same logic as the fetcher
+            html_url = None
+            if store_id and store_publisher_id and p.get("name"):
+                # Import here to avoid circular imports
+                import re
+                name_slug = re.sub(r"\s+", "-", p["name"].strip().lower())
+                html_url = f"https://appmagic.rocks/publisher/{name_slug}/{store_id}_{store_publisher_id}"
+            
             out.append(
                 ParsedItem(
                     topic="appmagic.publisher.account",
                     content={
-                        "store_id": acc.get("storeId") or acc.get("store"),
-                        "store_publisher_id": acc.get("publisherId")
-                        or acc.get("store_publisher_id"),
+                        "store_id": store_id,
+                        "store_publisher_id": store_publisher_id,
                         "united_publisher_id": p["id"],
-                        "group_id": p.get("groupId"),
-                        "html_url": acc.get("htmlUrl"),
+                        "group_id": publisher_group_id,  # Use the publisher's group_id
+                        "html_url": html_url,
                         "first_seen_at": datetime.utcnow().isoformat(),
                     },
                 )

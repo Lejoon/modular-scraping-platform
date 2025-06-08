@@ -66,7 +66,6 @@ CREATE TABLE IF NOT EXISTS StoreSpecificPublisherAccounts (
     united_publisher_id INTEGER,
     group_id INTEGER,
     html_url TEXT,
-    icon_url TEXT,
     first_seen_at DATETIME,
     last_updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (store_id, store_publisher_id)
@@ -183,7 +182,6 @@ CREATE TABLE IF NOT EXISTS PublisherAppsSummary (
                 "united_publisher_id",
                 "group_id",
                 "html_url",
-                "icon_url",
                 "first_seen_at",
             ],
         },

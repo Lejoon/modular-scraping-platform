@@ -56,7 +56,8 @@ CREATE TABLE IF NOT EXISTS UnitedPublishers (
     first_app_ad_date DATE,
     group_id INTEGER,
     first_seen_at DATETIME,
-    last_updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    last_updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (group_id) REFERENCES PublisherGroups(group_id)
 );
 """,
         "StoreSpecificPublisherAccounts": """

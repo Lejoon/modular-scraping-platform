@@ -352,15 +352,41 @@ class AppMagicParser(Transform):
 # ----------------------------------------------------------------------- #
 def _handler_groups(obj: Dict[str, Any]) -> List[ParsedItem]:
     company = obj["company"]
-    groups = obj.get("groups", []) or [{"id": None, "name": company["name"]}]
+    groups = obj.get("groups", [])
     out: List[ParsedItem] = []
 
+    # If no groups in API response, create a default group based on company
+    if not groups:
+        # Generate a consistent group_id based on company name/ticker hash
+        company_name = company.get("name", "Unknown")
+        company_ticker = company.get("ticker", "")
+        
+        # Create a deterministic group_id based on company info
+        group_hash_input = f"{company_name}_{company_ticker}".lower()
+        group_id = hash(group_hash_input) % (2**31)  # Ensure positive 32-bit int
+        
+        groups = [{
+            "id": group_id,
+            "name": company_name
+        }]
+        
+        logger.info(f"Created default group {group_id} for company '{company_name}' (ticker: {company_ticker})")
+
     for g in groups:
+        group_id = g["id"]
+        if group_id is None:
+            # Handle case where API has groups but with null IDs
+            company_name = company.get("name", "Unknown")
+            group_name = g.get("name", company_name)
+            group_hash_input = f"{group_name}_{company.get('ticker', '')}".lower()
+            group_id = hash(group_hash_input) % (2**31)
+            logger.warning(f"Group had null ID, generated {group_id} for group '{group_name}'")
+        
         out.append(
             ParsedItem(
                 topic="appmagic.group",
                 content={
-                    "group_id": g["id"],
+                    "group_id": group_id,
                     "group_name": g.get("name", company["name"]),
                     "discovered_in_ticker": company.get("ticker"),
                     "first_seen_at": datetime.utcnow().isoformat(),
@@ -375,21 +401,36 @@ def _handler_publishers(obj: Dict[str, Any]) -> List[ParsedItem]:
     pubs = obj.get("publishers", [])
     out: List[ParsedItem] = []
 
+    # Calculate the group_id that should match the one created in _handler_groups
+    company_name = company.get("name", "Unknown")
+    company_ticker = company.get("ticker", "")
+    group_hash_input = f"{company_name}_{company_ticker}".lower()
+    expected_group_id = hash(group_hash_input) % (2**31)  # Same logic as _handler_groups
+
     for p in pubs:
         if not isinstance(p, dict):
             continue
+
+        # Try to get group_id from API first, but fall back to calculated group_id
+        group_id = p.get("groupId") or expected_group_id
+        publisher_id = p["id"]
+        publisher_name = p.get("name", "Unknown")
+        
+        logger.debug(f"Processing publisher {publisher_id} ({publisher_name}): using group_id={group_id}")
+        if p.get("groupId") is None:
+            logger.info(f"Publisher {publisher_id} ({publisher_name}) had no groupId, assigned to calculated group_id={group_id}")
 
         out.append(
             ParsedItem(
                 topic="appmagic.publisher",
                 content={
-                    "united_publisher_id": p["id"],
+                    "united_publisher_id": publisher_id,
                     "name": p.get("name"),
                     "headquarter_country_code": p.get("headquarter"),  # API uses 'headquarter' not 'countryCode'
                     "linkedin_headcount": p.get("linkedin_headcount"),  # API uses 'linkedin_headcount' not 'linkedinHeadcount'
                     "min_release_date": p.get("min_release_date"),  # API uses 'min_release_date' not 'minReleaseDate'
                     "first_app_ad_date": p.get("first_app_ad"),  # API uses 'first_app_ad' not 'firstAppAdDate'
-                    "group_id": p.get("groupId"),
+                    "group_id": group_id,
                     "first_seen_at": datetime.utcnow().isoformat(),
                 },
             )
@@ -397,7 +438,6 @@ def _handler_publishers(obj: Dict[str, Any]) -> List[ParsedItem]:
 
         # Handle both accounts and publisherIds formats
         accounts_data = p.get("accounts", []) or p.get("publisherIds", [])
-        publisher_group_id = p.get("groupId")  # Get the group_id from the publisher
         
         for acc in accounts_data:
             # Extract store and publisher ID from the account object
@@ -419,7 +459,7 @@ def _handler_publishers(obj: Dict[str, Any]) -> List[ParsedItem]:
                         "store_id": store_id,
                         "store_publisher_id": store_publisher_id,
                         "united_publisher_id": p["id"],
-                        "group_id": publisher_group_id,  # Use the publisher's group_id
+                        "group_id": group_id,  # Use the same group_id as the publisher
                         "html_url": html_url,
                         "first_seen_at": datetime.utcnow().isoformat(),
                     },

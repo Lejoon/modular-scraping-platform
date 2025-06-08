@@ -395,7 +395,9 @@ def _handler_publishers(obj: Dict[str, Any]) -> List[ParsedItem]:
             )
         )
 
-        for acc in p.get("accounts", []):
+        # Handle both accounts and publisherIds formats
+        accounts_data = p.get("accounts", []) or p.get("publisherIds", [])
+        for acc in accounts_data:
             out.append(
                 ParsedItem(
                     topic="appmagic.publisher.account",

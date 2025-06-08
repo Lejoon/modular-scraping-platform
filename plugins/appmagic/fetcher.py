@@ -225,13 +225,18 @@ class AppMagicFetcher(Fetcher):
                     )
 
             # HTML page
-            for acc in pub.get("accounts", []):
+            # Check both accounts and publisherIds fields
+            accounts_data = pub.get("accounts", []) or pub.get("publisherIds", [])
+            for acc in accounts_data:
                 s = acc.get("storeId") or acc.get("store") or store_id
                 pid = acc.get("publisherId") or acc.get("store_publisher_id")
                 if not pid:
                     continue
+                logger.info(f"Fetching HTML for publisher {pub_name}, store={s}, publisher_id={pid}")
                 url = construct_html_url(pub.get("name", ""), s, pid)
+                logger.debug(f"HTML URL: {url}")
                 html = await self._safe_get_text(url)
+                logger.info(f"HTML fetch result: {len(html) if html else 0} characters")
                 if html:
                     yield RawItem(
                         source="appmagic.publisher_html",

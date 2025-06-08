@@ -78,7 +78,7 @@ class AppMagicFetcher(Fetcher):
             self._playwright_client = PlaywrightClient(
                 headless=True,
                 stealth=True,
-                timeout=30_000
+                timeout=15_000  # Reduced from 30s to 15s for better performance
             )
             await self._playwright_client.start()
         return self
@@ -162,9 +162,22 @@ class AppMagicFetcher(Fetcher):
             
         try:
             logger.debug(f"Fetching JavaScript-rendered content from: {url}")
-            html = await self._playwright_client.get_page_content(url, wait_for_selector)
-            logger.debug(f"Successfully rendered HTML: {len(html)} characters")
+            
+            # Try with specific selector first, but if it fails, get content anyway
+            if wait_for_selector:
+                try:
+                    html = await self._playwright_client.get_page_content(url, wait_for_selector)
+                    logger.debug(f"Successfully rendered HTML with selector: {len(html)} characters")
+                    return html
+                except Exception as selector_exc:
+                    logger.warning(f"Selector '{wait_for_selector}' failed: {selector_exc}, trying without selector")
+                    # Fall through to try without selector
+            
+            # Try without selector as fallback
+            html = await self._playwright_client.get_page_content(url)
+            logger.debug(f"Successfully rendered HTML without selector: {len(html)} characters")
             return html
+            
         except Exception as exc:  # noqa: BLE001
             logger.warning("JavaScript rendering failed for %s: %s, falling back to simple HTTP", url, exc)
             return await self._safe_get_text(url)
@@ -276,8 +289,8 @@ class AppMagicFetcher(Fetcher):
                 
                 # Use JavaScript renderer for SPA content if available, otherwise fall back to simple HTTP
                 if self._use_js_renderer:
-                    # Wait for common AppMagic content selectors to ensure the page is loaded
-                    wait_selector = ".publisher-info, .app-card, .stats-card, [data-testid='publisher-stats']"
+                    # Wait for the main app table container that we know exists from the test
+                    wait_selector = "div.table.ng-star-inserted"
                     html = await self._safe_get_html_with_js(url, wait_selector)
                 else:
                     html = await self._safe_get_text(url)

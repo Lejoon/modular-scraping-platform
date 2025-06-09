@@ -60,9 +60,9 @@ class AppMagicFetcher(Fetcher):
         http: Optional[HttpClient] = None,
         include_apps: bool = True,
         include_country_split: bool = False,
-        use_javascript_renderer: bool = True,
-        playwright_timeout: int = 30_000,  # New configurable Playwright timeout (30s)
-        wait_selector_timeout: int = 45_000,  # New configurable wait_for_selector timeout (45s)
+        use_html_fallback: bool = False,  # Changed from use_javascript_renderer - now disabled by default
+        playwright_timeout: int = 30_000,  # Still configurable for HTML fallback
+        wait_selector_timeout: int = 45_000,  # Still configurable for HTML fallback
     ) -> None:
         self._companies = companies
         self._rl = rate_limit_s
@@ -74,7 +74,7 @@ class AppMagicFetcher(Fetcher):
         )
         self._include_apps = include_apps
         self._include_country_split = include_country_split
-        self._use_js_renderer = use_javascript_renderer
+        self._use_html_fallback = use_html_fallback  # Updated variable name
         self._playwright_timeout = playwright_timeout
         self._wait_selector_timeout = wait_selector_timeout
         self._playwright_client: Optional[PlaywrightClient] = None
@@ -83,7 +83,7 @@ class AppMagicFetcher(Fetcher):
     # ------------------------------------------------------------------- #
     async def __aenter__(self):
         """Async context manager entry."""
-        if self._use_js_renderer:
+        if self._use_html_fallback:
             self._playwright_client = PlaywrightClient(
                 headless=True,
                 stealth=True,
@@ -361,49 +361,46 @@ class AppMagicFetcher(Fetcher):
                         fetched_at=fetched_at,
                     )
 
-            # HTML page - only fetch for the first account since others contain same data
-            # Check both accounts and publisherIds fields
-            accounts_data = pub.get("accounts", []) or pub.get("publisherIds", [])
-            if accounts_data:
-                # Only process the first account to avoid fetching duplicate data
-                acc = accounts_data[0]
-                s = acc.get("storeId") or acc.get("store") or store_id
-                pid = acc.get("publisherId") or acc.get("store_publisher_id")
-                if pid:
-                    logger.info(f"Fetching HTML for publisher {pub_name}, store={s}, publisher_id={pid} (first account only)")
-                    if len(accounts_data) > 1:
-                        logger.debug(f"Skipping {len(accounts_data) - 1} additional accounts for publisher {pub_name} - data is redundant")
-                    url = construct_html_url(pub.get("name", ""), s, pid)
-                    logger.debug(f"HTML URL: {url}")
-                    
-                    # Use JavaScript renderer for SPA content if available, otherwise fall back to simple HTTP
-                    if self._use_js_renderer:
-                        # Wait for the main app table container that we know exists from the test
+            # HTML page fetching is now optional since metrics are available via the API
+            # HTML fetching can be enabled with use_html_fallback=True if needed for debugging
+            if self._use_html_fallback:
+                accounts_data = pub.get("accounts", []) or pub.get("publisherIds", [])
+                if accounts_data:
+                    # Only process the first account to avoid fetching duplicate data
+                    acc = accounts_data[0]
+                    s = acc.get("storeId") or acc.get("store") or store_id
+                    pid = acc.get("publisherId") or acc.get("store_publisher_id")
+                    if pid:
+                        logger.info(f"HTML fallback: Fetching HTML for publisher {pub_name}, store={s}, publisher_id={pid} (first account only)")
+                        if len(accounts_data) > 1:
+                            logger.debug(f"Skipping {len(accounts_data) - 1} additional accounts for publisher {pub_name} - data is redundant")
+                        url = construct_html_url(pub.get("name", ""), s, pid)
+                        logger.debug(f"HTML URL: {url}")
+                        
+                        # Use JavaScript renderer for SPA content
                         wait_selector = "div.table.ng-star-inserted"
                         html = await self._safe_get_html_with_js(url, wait_selector)
+                            
+                        logger.info(f"HTML fetch result: {len(html) if html else 0} characters")
+                        if html:
+                            yield RawItem(
+                                source="appmagic.publisher_html",
+                                payload=json.dumps(
+                                    {
+                                        "up_id": up_id,
+                                        "store": s,
+                                        "store_publisher_id": pid,
+                                        "html_url": url,
+                                        "html": html,
+                                        "total_accounts": len(accounts_data),  # Include count for reference
+                                    }
+                                ).encode(),
+                                fetched_at=fetched_at,
+                            )
                     else:
-                        html = await self._safe_get_text(url)
-                        
-                    logger.info(f"HTML fetch result: {len(html) if html else 0} characters")
-                    if html:
-                        yield RawItem(
-                            source="appmagic.publisher_html",
-                            payload=json.dumps(
-                                {
-                                    "up_id": up_id,
-                                    "store": s,
-                                    "store_publisher_id": pid,
-                                    "html_url": url,
-                                    "html": html,
-                                    "total_accounts": len(accounts_data),  # Include count for reference
-                                }
-                            ).encode(),
-                            fetched_at=fetched_at,
-                        )
+                        logger.debug(f"First account for publisher {pub_name} has no valid publisher_id, skipping HTML fetch")
                 else:
-                    logger.debug(f"First account for publisher {pub_name} has no valid publisher_id, skipping HTML fetch")
-            else:
-                logger.debug(f"No accounts found for publisher {pub_name}, skipping HTML fetch")
+                    logger.debug(f"No accounts found for publisher {pub_name}, skipping HTML fetch")
 
     # ------------------------------------------------------------------- #
     async def _fetch_publisher_apps(

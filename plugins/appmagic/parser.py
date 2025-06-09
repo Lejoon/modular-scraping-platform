@@ -21,76 +21,49 @@ logger = logging.getLogger(__name__)
 # HTML parsing utilities
 # --------------------------------------------------------------------------- #
 def parse_appmagic_metric(metric_str: str) -> int:
-    """Parse AppMagic metric strings like '>$460 M', '1.2K', etc. to integers."""
-    if not metric_str:
+    """Parse AppMagic metric strings like '1.2K', '3.5M', etc. into integers."""
+    if not metric_str or metric_str in ["-", "—", "N/A"]:
         return 0
     
-    # Remove leading '>' and whitespace
-    clean = metric_str.lstrip('>$ ').strip()
-    if not clean:
-        return 0
+    # Remove any currency symbols and extra whitespace
+    metric_str = metric_str.strip().replace("$", "").replace(",", "")
     
-    # Extract number and suffix
-    parts = clean.split()
-    if not parts:
-        return 0
-    
-    number_part = parts[0].replace(',', '')
-    
-    # Handle suffixes K, M, B
-    multiplier = 1
-    if number_part.endswith('K'):
-        multiplier = 1_000
-        number_part = number_part[:-1]
-    elif number_part.endswith('M'):
-        multiplier = 1_000_000
-        number_part = number_part[:-1]
-    elif number_part.endswith('B'):
-        multiplier = 1_000_000_000
-        number_part = number_part[:-1]
-    
-    try:
-        return int(float(number_part) * multiplier)
-    except (ValueError, TypeError):
-        return 0
+    # Handle different suffixes
+    if metric_str.lower().endswith('k'):
+        return int(float(metric_str[:-1]) * 1000)
+    elif metric_str.lower().endswith('m'):
+        return int(float(metric_str[:-1]) * 1000000)
+    elif metric_str.lower().endswith('b'):
+        return int(float(metric_str[:-1]) * 1000000000)
+    else:
+        try:
+            return int(float(metric_str))
+        except ValueError:
+            return 0
 
 
 def parse_release_date(date_str: str) -> Optional[str]:
-    """Parse HTML release date string 'MMM DD, YYYY' to 'YYYY-MM-DD' format."""
-    if not date_str:
+    """Parse release date string and return in ISO format."""
+    if not date_str or date_str in ["-", "—", "N/A"]:
         return None
     
-    # Handle format like "Jan 15, 2023"
-    months = {
-        'Jan': '01', 'Feb': '02', 'Mar': '03', 'Apr': '04',
-        'May': '05', 'Jun': '06', 'Jul': '07', 'Aug': '08',
-        'Sep': '09', 'Oct': '10', 'Nov': '11', 'Dec': '12'
-    }
-    
-    try:
-        parts = date_str.replace(',', '').split()
-        if len(parts) == 3:
-            month_name, day, year = parts
-            month_num = months.get(month_name)
-            if month_num:
-                return f"{year}-{month_num}-{day.zfill(2)}"
-    except (ValueError, IndexError):
-        pass
-    
-    return None
+    # This would need more sophisticated date parsing based on AppMagic's format
+    # For now, return as-is
+    return date_str
 
 
 def extract_united_application_id_from_href(href: str) -> Optional[int]:
-    """Extract united_application_id from href like '/app/{store}/{store_specific_id}'."""
+    """Extract united application ID from an AppMagic app page href."""
     if not href:
         return None
     
-    # Look for patterns like /app/1/123456789
-    match = re.search(r'/app/(\d+)/([^/]+)', href)
-    if match:
-        # For now, we don't have a reliable way to get united_application_id from href
-        # This would need to be looked up or derived differently
-        return None
+    # Extract ID from URLs like "/app/123456/app-name"
+    parts = href.strip('/').split('/')
+    if len(parts) >= 2 and parts[0] == 'app':
+        try:
+            return int(parts[1])
+        except ValueError:
+            return None
     
     return None
 
@@ -189,13 +162,18 @@ class AppMagicParser(Transform):
         api_items = self._api_data_by_publisher.get(up_id, [])
         html_items = self._html_data_by_publisher.get(up_id, [])
         
-        # Separate API items by type
-        api_apps = [item for item in api_items if item.topic == "appmagic.publisher_apps_api"]
-        api_metrics = [item for item in api_items if item.topic == "appmagic.publisher_apps_metrics"]
+        logger.debug(f"Merging data for publisher {up_id}: {len(api_items)} API items, {len(html_items)} HTML items")
+        
+        # Separate API items by type - API items from publisher_apps_api handler have these topics
+        api_apps = [item for item in api_items if item.topic == "appmagic.application" and item.content.get("data_source") == "api"]
+        api_metrics = [item for item in api_items if item.topic == "appmagic.application.metrics"]
+        api_store_apps = [item for item in api_items if item.topic == "appmagic.application.store"]
         
         # Separate HTML items by type  
         html_apps = [item for item in html_items if item.topic == "appmagic.publisher_html"]
         non_app_html = [item for item in html_items if item.topic != "appmagic.publisher_html"]
+        
+        logger.debug(f"Publisher {up_id}: {len(api_apps)} API apps, {len(api_metrics)} API metrics, {len(api_store_apps)} API store apps, {len(html_apps)} HTML apps")
         
         # Yield non-app HTML items as-is
         for item in non_app_html:
@@ -271,22 +249,33 @@ class AppMagicParser(Transform):
                 content=merged_app_data,
             )
             
-            # Create merged metrics data
+            # Emit API store applications for this app
+            for store_item in api_store_apps:
+                if store_item.content.get("united_application_id") == ua_id:
+                    yield store_item
+            
+            # Create merged metrics data - prioritize API data over HTML
             merged_metrics_data = {
                 "scrape_date": datetime.utcnow().date().isoformat(),
                 "united_application_id": ua_id,
             }
             
-            if api_metric:
-                merged_metrics_data.update({
-                    "snapshot_30d_downloads": api_metric.content.get("snapshot_30d_downloads"),
-                    "snapshot_30d_revenue": api_metric.content.get("snapshot_30d_revenue"),
-                })
-            
+            # Start with HTML metrics as base (if available)
             if html_app:
                 merged_metrics_data.update({
                     "snapshot_lifetime_downloads": html_app.content.get("lifetime_downloads_val"),
                     "snapshot_lifetime_revenue": html_app.content.get("lifetime_revenue_val"),
+                })
+            
+            # API metrics take precedence and override HTML where available
+            if api_metric:
+                api_content = api_metric.content
+                merged_metrics_data.update({
+                    "snapshot_30d_downloads": api_content.get("snapshot_30d_downloads"),
+                    "snapshot_30d_revenue": api_content.get("snapshot_30d_revenue"),
+                    # API lifetime metrics override HTML if available
+                    "snapshot_lifetime_downloads": api_content.get("snapshot_lifetime_downloads") or merged_metrics_data.get("snapshot_lifetime_downloads"),
+                    "snapshot_lifetime_revenue": api_content.get("snapshot_lifetime_revenue") or merged_metrics_data.get("snapshot_lifetime_revenue"),
                 })
                 
             yield ParsedItem(
@@ -416,7 +405,6 @@ def _handler_publishers(obj: Dict[str, Any]) -> List[ParsedItem]:
         publisher_id = p["id"]
         publisher_name = p.get("name", "Unknown")
         
-        logger.debug(f"Processing publisher {publisher_id} ({publisher_name}): using group_id={group_id}")
         if p.get("groupId") is None:
             logger.info(f"Publisher {publisher_id} ({publisher_name}) had no groupId, assigned to calculated group_id={group_id}")
 
@@ -439,7 +427,7 @@ def _handler_publishers(obj: Dict[str, Any]) -> List[ParsedItem]:
         # Handle both accounts and publisherIds formats
         accounts_data = p.get("accounts", []) or p.get("publisherIds", [])
         
-        for acc in accounts_data:
+        for i, acc in enumerate(accounts_data):
             # Extract store and publisher ID from the account object
             store_id = acc.get("storeId") or acc.get("store")
             store_publisher_id = acc.get("publisherId") or acc.get("store_publisher_id")
@@ -535,6 +523,31 @@ def _handler_apps(obj: Dict[str, Any]) -> List[ParsedItem]:
     return out
 
 
+# --------------------------------------------------------------------------- #
+# Helper functions
+# --------------------------------------------------------------------------- #
+def extract_worldwide_metrics(metrics_array):
+    """
+    Extract worldwide (WW) metrics from a metrics array.
+    
+    Args:
+        metrics_array: List or dict containing metrics data
+        
+    Returns:
+        tuple: (downloads, revenue) for worldwide data, or (None, None) if not found
+    """
+    if isinstance(metrics_array, list):
+        # Look for WW country in the array
+        ww_metric = next((m for m in metrics_array if isinstance(m, dict) and m.get("country") == "WW"), None)
+        if ww_metric:
+            return ww_metric.get("downloads"), ww_metric.get("revenue")
+    elif isinstance(metrics_array, dict):
+        # If it's a dict, assume it's already the metric we want
+        return metrics_array.get("downloads"), metrics_array.get("revenue")
+    
+    return None, None
+
+
 def _handler_metrics(obj: Dict[str, Any]) -> List[ParsedItem]:
     snap = obj.get("snapshot") or {}
     return [
@@ -587,6 +600,11 @@ def _handler_publisher_apps_api(obj: Dict[str, Any]) -> List[ParsedItem]:
         logger.debug(f"Sample app structure: {list(sample_app.keys()) if isinstance(sample_app, dict) else type(sample_app)}")
         if isinstance(sample_app, dict):
             logger.debug(f"Sample app data: {dict(list(sample_app.items())[:5])}")  # First 5 fields
+            # Log metrics structure if available
+            if "metrics_30d" in sample_app:
+                logger.debug(f"Sample metrics_30d: {sample_app['metrics_30d']}")
+            if "metrics_lifetime" in sample_app:
+                logger.debug(f"Sample metrics_lifetime: {sample_app['metrics_lifetime']}")
     
     # Process applications from API search results
     for i, app in enumerate(applications):
@@ -597,61 +615,46 @@ def _handler_publisher_apps_api(obj: Dict[str, Any]) -> List[ParsedItem]:
             logger.warning(f"App {i+1} missing id: {app}")
             continue
             
-        # Create application record
+        # Create application record with data_source marking
         out.append(
             ParsedItem(
-                topic="appmagic.publisher_apps_api",
+                topic="appmagic.application",
                 content={
                     "united_application_id": ua_id,
                     "united_publisher_id": up_id,
                     "name": app.get("name"),
-                    "icon_url": app.get("icon_url"),
+                    "icon_url": app.get("icon_url") or app.get("icon"),
                     "release_date": app.get("releaseDate"),  # API uses 'releaseDate'
                     "contains_ads": app.get("contains_ads"),
                     "has_in_app_purchases": app.get("has_in_app_purchases"),
+                    "data_source": "api",  # Mark as coming from API
                     "first_seen_at": datetime.utcnow().isoformat(),
                 }
             )
         )
         
-        # Create metrics record if snapshot data exists
-        metrics_30d = app.get("metrics_30d")
-        metrics_lifetime = app.get("metrics_lifetime")
+        # Create metrics record from API data with worldwide (WW) country focus
+        metrics_30d = app.get("metrics_30d", [])
+        metrics_lifetime = app.get("metrics_lifetime", [])
         
-        # Handle different possible structures for metrics
-        downloads_30d = None
-        revenue_30d = None
-        downloads_lifetime = None
-        revenue_lifetime = None
+        # Extract worldwide metrics from the arrays using helper function
+        downloads_30d, revenue_30d = extract_worldwide_metrics(metrics_30d)
+        downloads_lifetime, revenue_lifetime = extract_worldwide_metrics(metrics_lifetime)
         
-        if isinstance(metrics_30d, dict):
-            downloads_30d = metrics_30d.get("downloads")
-            revenue_30d = metrics_30d.get("revenue")
-        elif isinstance(metrics_30d, list) and metrics_30d:
-            # If it's a list, take the first item
-            first_30d = metrics_30d[0] if isinstance(metrics_30d[0], dict) else {}
-            downloads_30d = first_30d.get("downloads")
-            revenue_30d = first_30d.get("revenue")
-            
-        if isinstance(metrics_lifetime, dict):
-            downloads_lifetime = metrics_lifetime.get("downloads")
-            revenue_lifetime = metrics_lifetime.get("revenue")
-        elif isinstance(metrics_lifetime, list) and metrics_lifetime:
-            # If it's a list, take the first item
-            first_lifetime = metrics_lifetime[0] if isinstance(metrics_lifetime[0], dict) else {}
-            downloads_lifetime = first_lifetime.get("downloads")
-            revenue_lifetime = first_lifetime.get("revenue")
+        if downloads_30d is not None or downloads_lifetime is not None:
+            logger.debug(f"Found WW metrics for app {ua_id}: 30d_downloads={downloads_30d}, 30d_revenue={revenue_30d}, lifetime_downloads={downloads_lifetime}, lifetime_revenue={revenue_lifetime}")
         
-        # Also check direct fields on the app object
+        # Also check direct fields on the app object as fallback
         if downloads_30d is None:
             downloads_30d = app.get("downloads")
         if revenue_30d is None:
             revenue_30d = app.get("revenue")
         
         if any([downloads_30d, revenue_30d, downloads_lifetime, revenue_lifetime]):
+            logger.debug(f"Creating metrics for app {ua_id}: 30d_downloads={downloads_30d}, 30d_revenue={revenue_30d}, lifetime_downloads={downloads_lifetime}, lifetime_revenue={revenue_lifetime}")
             out.append(
                 ParsedItem(
-                    topic="appmagic.publisher_apps_metrics", 
+                    topic="appmagic.application.metrics",  # Changed to standard metrics topic
                     content={
                         "scrape_date": datetime.utcnow().date().isoformat(),
                         "united_application_id": ua_id,
@@ -825,13 +828,12 @@ def parse_publisher_page_html(html_content):
     app_rows_container = soup.select_one('div.table.ng-star-inserted')
     
     if not app_rows_container:
-        logger.debug("Warning: Could not find the main app table container.")
+        logger.warning("Could not find the main app table container")
         return {"publisher_info": publisher_info, "apps": apps_data_list}
         
     app_rows = app_rows_container.find_all('publisher-app-row', class_='g-item', recursive=False)
     if not app_rows:
-        logger.debug("Warning: No app rows found within the table container.")
-        return {"publisher_info": publisher_info, "apps": apps_data_list}
+        logger.warning(f"Could not find app rows in the table container")
 
     for row in app_rows:
         app_data = extract_app_data(row)
@@ -847,85 +849,50 @@ def _handler_publisher_html(obj: Dict[str, Any]) -> List[ParsedItem]:
     html_content = obj.get("html", "")
     
     if not html_content:
+        logger.warning(f"No HTML content provided for publisher {up_id}")
         return out
     
     logger.debug(f"Parsing HTML content for publisher {up_id}: {len(html_content)} characters")
     
     try:
-        # Use the sophisticated parser
         parsed_data = parse_publisher_page_html(html_content)
-        publisher_info = parsed_data["publisher_info"]
         apps_data = parsed_data["apps"]
         
-        logger.debug(f"Found {len(apps_data)} apps for publisher {up_id}")
+        logger.info(f"Extracted {len(apps_data)} apps from HTML for publisher {up_id}")
         
-        # Convert each app to a ParsedItem
         for app_data in apps_data:
-            # Enhance with united_publisher_id and timestamp
-            enhanced_app_data = {
-                **app_data,
-                "united_publisher_id": up_id,
-                "first_seen_at": datetime.utcnow().isoformat(),
-                "publisher_name": publisher_info.get("name", "N/A")
-            }
-            
-            # Try to extract united_application_id from href if available
-            if app_data.get("appmagic_id_path"):
-                ua_id = extract_united_application_id_from_href(app_data["appmagic_id_path"])
-                if ua_id:
-                    enhanced_app_data["united_application_id"] = ua_id
-            
-            out.append(
-                ParsedItem(
-                    topic="appmagic.publisher_html",
-                    content=enhanced_app_data
+            if app_data.get("name") and app_data["name"] != "N/A":
+                out.append(
+                    ParsedItem(
+                        topic="appmagic.publisher_html",
+                        content={
+                            **app_data,
+                            "united_publisher_id": up_id,
+                            "data_source": "html",
+                            "first_seen_at": datetime.utcnow().isoformat(),
+                        }
+                    )
                 )
-            )
         
-        # Also create a publisher info item
-        if publisher_info["name"] != "N/A":
-            publisher_data = {
-                **publisher_info,
-                "united_publisher_id": up_id,
-                "apps_count": len(apps_data),
-                "parsed_at": datetime.utcnow().isoformat()
-            }
-            
+        # Also emit the publisher summary if we extracted useful data
+        publisher_info = parsed_data["publisher_info"]
+        if publisher_info["total_apps"] > 0:
             out.append(
                 ParsedItem(
-                    topic="appmagic.publisher_info",
-                    content=publisher_data
+                    topic="appmagic.publisher_summary",
+                    content={
+                        "united_publisher_id": up_id,
+                        "total_apps_from_html": publisher_info["total_apps"],
+                        "total_downloads_str": publisher_info["total_downloads"],
+                        "total_revenue_str": publisher_info["total_revenue"],
+                        "data_source": "html",
+                        "first_seen_at": datetime.utcnow().isoformat(),
+                    }
                 )
             )
             
     except Exception as e:
-        logger.warning(f"Error parsing HTML for publisher {up_id}: {e}")
-        # Fallback to basic parsing
-        soup = BeautifulSoup(html_content, "html.parser")
-        
-        # Look for any app-related content as fallback
-        app_links = soup.find_all("a", href=re.compile(r'/app/'))
-        logger.debug(f"Fallback parser found {len(app_links)} potential app links")
-        
-        for link in app_links:
-            name = link.get_text(strip=True)
-            href = link.get("href", "")
-            
-            if name and href:
-                fallback_data = {
-                    "united_publisher_id": up_id,
-                    "name": name,
-                    "appmagic_id_path": href,
-                    "first_seen_at": datetime.utcnow().isoformat(),
-                    "parsing_method": "fallback"
-                }
-                
-                out.append(
-                    ParsedItem(
-                        topic="appmagic.publisher_html",
-                        content=fallback_data
-                    )
-                )
+        logger.error(f"Error parsing HTML content for publisher {up_id}: {e}")
     
     return out
 

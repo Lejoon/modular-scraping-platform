@@ -371,7 +371,13 @@ CREATE TABLE IF NOT EXISTS PublisherAppsSummary (
         data = {}
         for c in cols:
             if c in row:
-                data[c] = row[c]
+                value = row[c]
+                # Convert lists to JSON strings for SQLite compatibility
+                if isinstance(value, list):
+                    import json
+                    data[c] = json.dumps(value)
+                else:
+                    data[c] = value
         
         # Use the Database's upsert method which handles commits properly
         await self.db.upsert(table, data, pk)

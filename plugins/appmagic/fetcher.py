@@ -361,41 +361,49 @@ class AppMagicFetcher(Fetcher):
                         fetched_at=fetched_at,
                     )
 
-            # HTML page
+            # HTML page - only fetch for the first account since others contain same data
             # Check both accounts and publisherIds fields
             accounts_data = pub.get("accounts", []) or pub.get("publisherIds", [])
-            for acc in accounts_data:
+            if accounts_data:
+                # Only process the first account to avoid fetching duplicate data
+                acc = accounts_data[0]
                 s = acc.get("storeId") or acc.get("store") or store_id
                 pid = acc.get("publisherId") or acc.get("store_publisher_id")
-                if not pid:
-                    continue
-                logger.info(f"Fetching HTML for publisher {pub_name}, store={s}, publisher_id={pid}")
-                url = construct_html_url(pub.get("name", ""), s, pid)
-                logger.debug(f"HTML URL: {url}")
-                
-                # Use JavaScript renderer for SPA content if available, otherwise fall back to simple HTTP
-                if self._use_js_renderer:
-                    # Wait for the main app table container that we know exists from the test
-                    wait_selector = "div.table.ng-star-inserted"
-                    html = await self._safe_get_html_with_js(url, wait_selector)
-                else:
-                    html = await self._safe_get_text(url)
+                if pid:
+                    logger.info(f"Fetching HTML for publisher {pub_name}, store={s}, publisher_id={pid} (first account only)")
+                    if len(accounts_data) > 1:
+                        logger.debug(f"Skipping {len(accounts_data) - 1} additional accounts for publisher {pub_name} - data is redundant")
+                    url = construct_html_url(pub.get("name", ""), s, pid)
+                    logger.debug(f"HTML URL: {url}")
                     
-                logger.info(f"HTML fetch result: {len(html) if html else 0} characters")
-                if html:
-                    yield RawItem(
-                        source="appmagic.publisher_html",
-                        payload=json.dumps(
-                            {
-                                "up_id": up_id,
-                                "store": s,
-                                "store_publisher_id": pid,
-                                "html_url": url,
-                                "html": html,
-                            }
-                        ).encode(),
-                        fetched_at=fetched_at,
-                    )
+                    # Use JavaScript renderer for SPA content if available, otherwise fall back to simple HTTP
+                    if self._use_js_renderer:
+                        # Wait for the main app table container that we know exists from the test
+                        wait_selector = "div.table.ng-star-inserted"
+                        html = await self._safe_get_html_with_js(url, wait_selector)
+                    else:
+                        html = await self._safe_get_text(url)
+                        
+                    logger.info(f"HTML fetch result: {len(html) if html else 0} characters")
+                    if html:
+                        yield RawItem(
+                            source="appmagic.publisher_html",
+                            payload=json.dumps(
+                                {
+                                    "up_id": up_id,
+                                    "store": s,
+                                    "store_publisher_id": pid,
+                                    "html_url": url,
+                                    "html": html,
+                                    "total_accounts": len(accounts_data),  # Include count for reference
+                                }
+                            ).encode(),
+                            fetched_at=fetched_at,
+                        )
+                else:
+                    logger.debug(f"First account for publisher {pub_name} has no valid publisher_id, skipping HTML fetch")
+            else:
+                logger.debug(f"No accounts found for publisher {pub_name}, skipping HTML fetch")
 
     # ------------------------------------------------------------------- #
     async def _fetch_publisher_apps(

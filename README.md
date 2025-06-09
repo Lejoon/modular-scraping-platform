@@ -13,9 +13,9 @@ modular-scraping-platform/
 │   ├── plugin_loader.py           # Automatic plugin discovery system
 │   ├── pipeline_orchestrator.py   # Pipeline execution engine with context management
 │   └── infra/                     # Infrastructure components
-│       ├── http.py               # aiohttp wrapper with exponential backoff retry
+│       ├── http.py               # Advanced HTTP client with retry logic & jitter
 │       ├── ws.py                 # WebSocket client with heartbeat / reconnect
-│       ├── sel.py                # Playwright helpers for browser automation
+│       ├── sel.py                # Playwright client with stealth mode & utilities
 │       ├── db.py                 # Async SQLite wrapper with migrations & WAL mode
 │       └── scheduler.py          # APScheduler wrapper for cron scheduling
 │
@@ -42,9 +42,52 @@ modular-scraping-platform/
 - **YAML Configuration**: Declarative pipeline definition with no code changes required
 - **Async Streaming**: Backpressure-aware processing with async iterators and context management
 - **Change Detection**: Built-in diff detection against database state (DiffParser)
-- **Robust Infrastructure**: HTTP retry with exponential backoff, database migrations, WebSocket auto-reconnect
+- **Robust Infrastructure**: Advanced HTTP retry with jitter, Playwright stealth mode, database migrations, WebSocket auto-reconnect
 - **Resource Management**: Automatic cleanup via async context managers (`__aenter__`/`__aexit__`)
 - **Type Safety**: Pydantic models throughout with datetime defaults and validation
+
+## Infrastructure Components
+
+The framework provides battle-tested infrastructure modules that handle common scraping challenges:
+
+### HttpClient (`core/infra/http.py`)
+Advanced HTTP client built on aiohttp with production-ready features:
+- **Smart Retry Logic**: Exponential backoff with jitter for 429/5xx status codes
+- **Retry-After Support**: Automatically parses and respects HTTP `Retry-After` headers
+- **Session Management**: Automatic session lifecycle with connection pooling
+- **Default Headers**: Per-instance headers (User-Agent, etc.) with merge capabilities
+- **Convenience Methods**: `get_text()`, `get_json()`, `get_bytes()`, `post_json()`
+
+```python
+from core.infra.http import HttpClient
+
+async with HttpClient(max_retries=5, base_delay=2.0) as client:
+    data = await client.get_json("https://api.example.com/data")
+```
+
+### PlaywrightClient (`core/infra/sel.py`)
+Full-featured browser automation with anti-detection capabilities:
+- **Stealth Mode**: Random User-Agent, navigator.webdriver removal, plugin spoofing
+- **Cookie Utilities**: `dismiss_cookies()` with fallback selector support
+- **Infinite Scroll**: `scroll_to_bottom()` for lazy-loading pages
+- **Click Utilities**: `click_repeatedly()` for "Load More" buttons
+- **Shadow DOM**: Built-in shadow DOM content extraction
+- **Context Management**: Automatic browser/context cleanup
+
+```python
+from core.infra.sel import PlaywrightClient
+
+async with PlaywrightClient(stealth=True) as pw:
+    page = await pw.new_page()
+    html = await pw.get_page_content("https://spa-app.com", wait_for_selector=".content")
+```
+
+### Database (`core/infra/db.py`)
+Async SQLite wrapper with production features:
+- **WAL Mode**: Concurrent read access for better performance  
+- **Auto-Migration**: Schema versioning and automatic table creation
+- **Upsert Operations**: Conflict-aware inserts for data deduplication
+- **Connection Pooling**: Efficient resource management
 
 ## Quick Start
 
@@ -188,14 +231,31 @@ The system automatically creates and migrates SQLite tables based on the ParsedI
    ```python
    from core.interfaces import Fetcher, Sink, Transform
    from core.models import RawItem, ParsedItem
+   from core.infra.http import HttpClient
+   from core.infra.sel import PlaywrightClient
    from typing import AsyncIterator, Any, List
+   from datetime import datetime
    
    class MyFetcher(Fetcher):
        name = "MyFetcher"
        
+       def __init__(self, *, use_browser: bool = False):
+           self.use_browser = use_browser
+           self.http_client = HttpClient(max_retries=3)
+           self.browser_client = PlaywrightClient(stealth=True) if use_browser else None
+       
        async def fetch(self) -> AsyncIterator[RawItem]:
-           # Your fetching logic here
-           yield RawItem(source="my.source", payload=b"data", fetched_at=datetime.utcnow())
+           # HTTP fetching with automatic retry
+           if not self.use_browser:
+               async with self.http_client as client:
+                   data = await client.get_json("https://api.example.com/data")
+                   yield RawItem(source="api.data", payload=str(data).encode(), fetched_at=datetime.utcnow())
+           
+           # Browser automation for SPAs
+           else:
+               async with self.browser_client as browser:
+                   html = await browser.get_page_content("https://spa.example.com", wait_for_selector=".content")
+                   yield RawItem(source="spa.html", payload=html.encode(), fetched_at=datetime.utcnow())
        
        # __call__ method provided by Fetcher base class
 
@@ -292,7 +352,8 @@ pytest
 
 - **Memory**: Async iterators process items one at a time
 - **Database**: SQLite WAL mode enables concurrent reads
-- **HTTP**: Exponential backoff prevents overwhelming target APIs
+- **HTTP**: Advanced exponential backoff with jitter prevents overwhelming target APIs, Retry-After header support minimizes unnecessary delays
+- **Browser Automation**: Stealth mode reduces detection risks, infinite scroll utilities handle complex SPAs efficiently
 - **CPU**: Pandas operations are the main computational bottleneck
 
 ## Migration from Old System
@@ -550,3 +611,55 @@ The TCGPlayer plugin successfully demonstrates:
 **Schema Evolution**: Automatic column addition (e.g., `updated_at` column) for schema changes
 
 This plugin showcases how the framework handles real-world complexity including API integration, database relationships, and multi-stage data processing pipelines.
+
+## Best Practices
+
+When developing plugins, follow these patterns for optimal reliability:
+
+#### HTTP Client Usage
+```python
+# Good: Configure retry settings based on target API characteristics
+self.http = HttpClient(
+    max_retries=6,                    # API-dependent: more for flaky services
+    base_delay=2.0,                   # Start conservative to avoid overwhelming
+    default_headers={"User-Agent": "YourBot/1.0"}  # Always identify your bot
+)
+
+# Good: Use appropriate method for data type
+text_data = await client.get_text(url)          # For HTML/XML
+json_data = await client.get_json(url)          # For APIs
+binary_data = await client.get_bytes(url)       # For files/images
+```
+
+#### Browser Automation
+```python
+# Good: Enable stealth mode for detection-sensitive sites
+browser = PlaywrightClient(stealth=True, timeout=30_000)
+
+# Good: Use utility functions for common patterns
+await dismiss_cookies(page, [".accept-cookies", "#cookie-ok"])
+await scroll_to_bottom(page, max_scrolls=10)
+
+# Good: Always wait for content before extraction
+await page.wait_for_selector(".content", timeout=30_000)
+html = await page.content()
+```
+
+#### Resource Management
+```python
+# Good: Use async context managers for automatic cleanup
+async with HttpClient() as client:
+    data = await client.get_json(url)
+
+async with PlaywrightClient() as browser:
+    html = await browser.get_page_content(url)
+
+# Good: Implement __aenter__/__aexit__ in custom fetchers
+class MyFetcher(Fetcher):
+    async def __aenter__(self):
+        await self.http_client.__aenter__()
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.http_client.__aexit__(exc_type, exc_val, exc_tb)
+```

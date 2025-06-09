@@ -1,5 +1,5 @@
 # core/plugins/appmagic/parser.py
-"""Transform stage 2 / 3 – RawItem → ParsedItem."""
+"""Transform stage 2 / 3 - RawItem → ParsedItem."""
 
 from __future__ import annotations
 

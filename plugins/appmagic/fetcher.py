@@ -55,19 +55,28 @@ class AppMagicFetcher(Fetcher):
         self,
         *,
         companies: List[Dict[str, Any]],
-        rate_limit_s: float = 0.8,
-        max_retries: int = 4,
+        rate_limit_s: float = 1.5,  # Increased from 0.8 to reduce 429 errors
+        max_retries: int = 6,  # Increased from 4 for better resilience
         http: Optional[HttpClient] = None,
         include_apps: bool = True,
         include_country_split: bool = False,
         use_javascript_renderer: bool = True,
+        playwright_timeout: int = 30_000,  # New configurable Playwright timeout (30s)
+        wait_selector_timeout: int = 45_000,  # New configurable wait_for_selector timeout (45s)
     ) -> None:
         self._companies = companies
         self._rl = rate_limit_s
-        self._http = http or HttpClient(max_retries=max_retries)
+        # Configure HttpClient with longer delays for better 429 handling
+        self._http = http or HttpClient(
+            max_retries=max_retries,
+            base_delay=15,  # Increased from default 1.0s
+            max_delay=120.0,  # Increased from default 60.0s
+        )
         self._include_apps = include_apps
         self._include_country_split = include_country_split
         self._use_js_renderer = use_javascript_renderer
+        self._playwright_timeout = playwright_timeout
+        self._wait_selector_timeout = wait_selector_timeout
         self._playwright_client: Optional[PlaywrightClient] = None
  #------------------------------------------------------------------- #
     # Async context manager for proper resource cleanup
@@ -78,7 +87,7 @@ class AppMagicFetcher(Fetcher):
             self._playwright_client = PlaywrightClient(
                 headless=True,
                 stealth=True,
-                timeout=15_000  # Reduced from 30s to 15s for better performance
+                timeout=self._playwright_timeout  # Use configurable timeout
             )
             await self._playwright_client.start()
         return self
@@ -112,7 +121,12 @@ class AppMagicFetcher(Fetcher):
                         logger.debug(f"  {key}: {type(result[key]).__name__}")
             return result
         except Exception as exc:  # noqa: BLE001
-            logger.warning("GET %s failed: %s", url, exc)
+            # For rate limiting errors, add extra delay
+            if "429" in str(exc) or "rate" in str(exc).lower():
+                logger.warning("Rate limit detected for GET %s, adding extra delay: %s", url, exc)
+                await asyncio.sleep(30.0)  # Extra 30s delay for rate limits
+            else:
+                logger.warning("GET %s failed: %s", url, exc)
             return {}
 
     async def _safe_post_json(self, url: str, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -133,7 +147,12 @@ class AppMagicFetcher(Fetcher):
                         logger.debug(f"  {key}: {type(result[key]).__name__}")
             return result
         except Exception as exc:  # noqa: BLE001
-            logger.warning("POST %s failed: %s", url, exc)
+            # For rate limiting errors, add extra delay
+            if "429" in str(exc) or "rate" in str(exc).lower():
+                logger.warning("Rate limit detected for POST %s, adding extra delay: %s", url, exc)
+                await asyncio.sleep(30.0)  # Extra 30s delay for rate limits
+            else:
+                logger.warning("POST %s failed: %s", url, exc)
             return {}
 
     async def _safe_get_text(self, url: str, **kw) -> str:
@@ -160,27 +179,94 @@ class AppMagicFetcher(Fetcher):
             logger.warning("Playwright client not available, falling back to simple HTTP")
             return await self._safe_get_text(url)
             
-        try:
-            logger.debug(f"Fetching JavaScript-rendered content from: {url}")
-            
-            # Try with specific selector first, but if it fails, get content anyway
-            if wait_for_selector:
+        max_attempts = 3
+        attempt = 0
+        
+        while attempt < max_attempts:
+            attempt += 1
+            try:
+                logger.debug(f"Fetching JavaScript-rendered content from: {url} (attempt {attempt}/{max_attempts})")
+                
+                # Try with specific selector first, but if it fails, get content anyway
+                if wait_for_selector:
+                    try:
+                        # Use custom page creation for better control
+                        page = await self._playwright_client.new_page()
+                        try:
+                            await page.goto(url, wait_until="domcontentloaded", timeout=self._playwright_timeout)
+                            
+                            # Wait for selector with custom timeout and retries
+                            logger.debug(f"Waiting for selector: {wait_for_selector} (timeout: {self._wait_selector_timeout}ms)")
+                            
+                            # Try multiple fallback selectors if the primary one fails
+                            selectors_to_try = [
+                                wait_for_selector,
+                                "body",  # Fallback to body if specific selector fails
+                                "html"   # Ultimate fallback
+                            ]
+                            
+                            selector_found = False
+                            for selector in selectors_to_try:
+                                try:
+                                    await page.wait_for_selector(selector, timeout=self._wait_selector_timeout)
+                                    logger.debug(f"Successfully found selector: {selector}")
+                                    selector_found = True
+                                    break
+                                except Exception as sel_exc:
+                                    logger.debug(f"Selector '{selector}' failed: {sel_exc}")
+                                    continue
+                            
+                            if not selector_found:
+                                logger.warning(f"All selectors failed, but continuing to get content")
+                            
+                            # Additional wait for dynamic content to load
+                            await asyncio.sleep(2.0)  # Give SPA time to render
+                            
+                            html = await page.content()
+                            logger.debug(f"Successfully rendered HTML with JavaScript: {len(html)} characters")
+                            return html
+                            
+                        finally:
+                            await page.close()
+                            
+                    except Exception as selector_exc:
+                        logger.warning(f"JavaScript rendering with selector failed (attempt {attempt}): {selector_exc}")
+                        if attempt < max_attempts:
+                            wait_time = 5.0 * attempt  # Progressive delay: 5s, 10s, 15s
+                            logger.info(f"Retrying in {wait_time}s...")
+                            await asyncio.sleep(wait_time)
+                            continue
+                        # Fall through to try without selector on final attempt
+                
+                # Try without selector as fallback
                 try:
-                    html = await self._playwright_client.get_page_content(url, wait_for_selector)
-                    logger.debug(f"Successfully rendered HTML with selector: {len(html)} characters")
-                    return html
-                except Exception as selector_exc:
-                    logger.warning(f"Selector '{wait_for_selector}' failed: {selector_exc}, trying without selector")
-                    # Fall through to try without selector
-            
-            # Try without selector as fallback
-            html = await self._playwright_client.get_page_content(url)
-            logger.debug(f"Successfully rendered HTML without selector: {len(html)} characters")
-            return html
-            
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("JavaScript rendering failed for %s: %s, falling back to simple HTTP", url, exc)
-            return await self._safe_get_text(url)
+                    page = await self._playwright_client.new_page()
+                    try:
+                        await page.goto(url, wait_until="domcontentloaded", timeout=self._playwright_timeout)
+                        await asyncio.sleep(3.0)  # Give more time for SPA to render
+                        html = await page.content()
+                        logger.debug(f"Successfully rendered HTML without selector: {len(html)} characters")
+                        return html
+                    finally:
+                        await page.close()
+                except Exception as no_selector_exc:
+                    logger.warning(f"JavaScript rendering without selector failed (attempt {attempt}): {no_selector_exc}")
+                    if attempt < max_attempts:
+                        wait_time = 10.0 * attempt  # Longer delay for complete failures
+                        logger.info(f"Retrying JavaScript rendering in {wait_time}s...")
+                        await asyncio.sleep(wait_time)
+                        continue
+                
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"JavaScript rendering attempt {attempt} failed for {url}: {exc}")
+                if attempt < max_attempts:
+                    wait_time = 15.0 * attempt  # Even longer delay for major failures
+                    logger.info(f"Retrying in {wait_time}s...")
+                    await asyncio.sleep(wait_time)
+                    continue
+        
+        logger.warning("All JavaScript rendering attempts failed for %s, falling back to simple HTTP", url)
+        return await self._safe_get_text(url)
 
     # ------------------------------------------------------------------- #
     async def fetch(self) -> AsyncIterator[RawItem]:

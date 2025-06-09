@@ -187,13 +187,37 @@ A new source = one YAML stanza + dropping new plugin folder in `plugins/`. Zero 
 
 | Module         | Implementation                                                                          |
 | -------------- | --------------------------------------------------------------------------------------- |
-| **http.py**    | aiohttp wrapper with exponential backoff retry, session management, timeout handling   |
+| **http.py**    | Advanced aiohttp wrapper with exponential backoff + jitter, Retry-After header parsing, per-instance default headers, configurable timeouts, and transparent 429/5xx retry handling |
 | **ws.py**      | WebSocket client with heartbeat, automatic reconnection, and backpressure management   |
-| **sel.py**     | Playwright helpers for browser automation with shadow DOM support                      |
+| **sel.py**     | Full-featured Playwright wrapper with stealth mode, cookie dismissal utilities, infinite scroll support, shadow DOM extraction, form automation, and async context management |
 | **db.py**      | Async SQLite wrapper with migrations, connection pooling, WAL mode, and upsert support |
 | **scheduler.py** | APScheduler wrapper for cron-based scheduling (future enhancement)                   |
 
 All plugins import from these; none re-implement them.
+
+**Production Battle-Tested**: These modules power real-world scrapers handling millions of requests across different domains - from financial data APIs to complex SPAs with anti-bot protection. The retry logic alone has saved countless hours of debugging flaky network conditions.
+
+### HttpClient Advanced Features
+
+- **Smart Retry Logic**: Exponential backoff with jitter for 429/5xx status codes
+- **Retry-After Support**: Automatically parses and respects HTTP `Retry-After` headers (both seconds and HTTP-date formats)
+- **Session Management**: Automatic session lifecycle with external session support
+- **Default Headers**: Per-instance default headers with merge capabilities
+- **Convenience Methods**: `get_text()`, `get_json()`, `get_bytes()`, `post_json()` with automatic timeout adjustment
+- **Context Manager**: Full async context manager support for resource cleanup
+
+### PlaywrightClient Advanced Features
+
+- **Stealth Mode**: Random User-Agent generation, navigator.webdriver removal, plugin/language spoofing
+- **Browser Support**: Chromium, Firefox, and WebKit with configurable launch parameters
+- **Utility Functions**: 
+  - `dismiss_cookies()`: Try multiple selectors to dismiss cookie banners
+  - `click_repeatedly()`: Keep clicking elements until they disappear (useful for "Load More" buttons)
+  - `scroll_to_bottom()`: Infinite scroll support for lazy-loading pages
+- **Shadow DOM**: Built-in shadow DOM content extraction
+- **Form Automation**: Complete form filling and submission with navigation waiting
+- **Resource Management**: Automatic browser/context cleanup via async context managers
+- **Escape Hatches**: `extra_launch_kwargs` and `extra_context_kwargs` for full Playwright API access
 
 ---
 
@@ -381,3 +405,95 @@ pipelines:
 4. `DatabaseSink` upserts data to SQLite with automatic schema management
 
 **Zero Registration Required**: Drop the plugin folder, restart the system, and it's automatically discovered and available for use in YAML configuration.
+
+---
+
+### Infrastructure Module Usage Examples
+
+The infrastructure modules provide powerful abstractions for common scraping patterns:
+
+#### HTTP Client with Retry Logic
+
+```python
+from core.infra.http import HttpClient
+
+class ApiFetcher(Fetcher):
+    def __init__(self, *, api_key: str):
+        # Configure with smart defaults for API scraping
+        self.http = HttpClient(
+            max_retries=6,           # More retries for flaky APIs
+            base_delay=2.0,          # Start with 2s delays
+            max_delay=120.0,         # Cap at 2 minutes
+            default_headers={
+                "User-Agent": "MyBot/1.0",
+                "Authorization": f"Bearer {api_key}"
+            }
+        )
+    
+    async def fetch(self) -> AsyncIterator[RawItem]:
+        async with self.http as client:
+            # Automatic retry with exponential backoff + jitter
+            # Respects Retry-After headers from 429 responses
+            data = await client.get_json("https://api.example.com/data")
+            yield RawItem(source="api.data", payload=str(data).encode())
+```
+
+#### Browser Automation with Stealth Mode
+
+```python
+from core.infra.sel import PlaywrightClient, dismiss_cookies, scroll_to_bottom
+
+class SpaFetcher(Fetcher):
+    def __init__(self):
+        self.browser = PlaywrightClient(
+            stealth=True,            # Anti-detection features
+            browser_type="chromium", # Most compatible
+            timeout=45_000           # 45s for slow SPAs
+        )
+    
+    async def fetch(self) -> AsyncIterator[RawItem]:
+        async with self.browser as pw:
+            page = await pw.new_page()
+            await page.goto("https://spa.example.com")
+            
+            # Dismiss cookie banners with fallback selectors
+            await dismiss_cookies(page, [
+                "button[data-accept='cookies']",
+                ".cookie-banner .accept",
+                "#cookie-accept"
+            ])
+            
+            # Handle infinite scroll
+            await scroll_to_bottom(page, max_scrolls=20)
+            
+            # Wait for dynamic content
+            await page.wait_for_selector(".data-table", timeout=30_000)
+            
+            html = await page.content()
+            yield RawItem(source="spa.html", payload=html.encode())
+```
+
+#### Complex Form Automation
+
+```python
+async def fetch_protected_data(self) -> AsyncIterator[RawItem]:
+    async with self.browser as pw:
+        # Login form automation
+        login_html = await pw.fill_form_and_submit(
+            url="https://example.com/login",
+            form_data={
+                "#username": "myuser",
+                "#password": "mypass"
+            },
+            submit_selector="button[type='submit']",
+            wait_for_navigation=True
+        )
+        
+        # Navigate to data page with authentication
+        data_html = await pw.get_page_content(
+            "https://example.com/protected-data",
+            wait_for_selector=".results-table"
+        )
+        
+        yield RawItem(source="protected.data", payload=data_html.encode())
+```

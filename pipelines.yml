@@ -74,14 +74,14 @@ pipelines:
       - class: appmagic.AppMagicFetcher
         kwargs:
           companies:
-            # - name: "Zynga"
-            #   ticker: "TTWO"
-            #   store: 1
-            #   store_publisher_id: "6690081412016968981"
-            # - name: "Crazylabs"
-            #   ticker: "EMBRAC"
-            #   store: 1
-            #   store_publisher_id: "6443412597262225303"
+            - name: "Zynga"
+              ticker: "TTWO"
+              store: 1
+              store_publisher_id: "6690081412016968981"
+            - name: "Crazylabs"
+              ticker: "EMBRAC"
+              store: 1
+              store_publisher_id: "6443412597262225303"
             - name: "G5 Entertainment"
               ticker: "G5"
               store: 1
@@ -90,22 +90,22 @@ pipelines:
               ticker: "MAGI"
               store: 1
               store_publisher_id: "6558349509091194327"
-            # - name: "Bytro Labs"
-            #   ticker: "SF"
-            #   store: 2
-            #   store_publisher_id: "1287077622"
-            # - name: "Big Blue Bubble"
-            #   ticker: "EG7"
-            #   store: 1
-            #   store_publisher_id: "6388759014800755560"
-            # - name: "Plarium Global"
-            #   ticker: "MTG"
-            #   store: 1
-            #   store_publisher_id: "5766366711041032164"
-            # - name: "Electronic Arts"
-            #   ticker: "EA"
-            #   store: 1
-            #   store_publisher_id: "6605125519975771237"
+            - name: "Bytro Labs"
+              ticker: "SF"
+              store: 2
+              store_publisher_id: "1287077622"
+            - name: "Big Blue Bubble"
+              ticker: "EG7"
+              store: 1
+              store_publisher_id: "6388759014800755560"
+            - name: "Plarium Global"
+              ticker: "MTG"
+              store: 1
+              store_publisher_id: "5766366711041032164"
+            - name: "Electronic Arts"
+              ticker: "EA"
+              store: 1
+              store_publisher_id: "6605125519975771237"
 
       - class: appmagic.AppMagicParser
         kwargs: {}

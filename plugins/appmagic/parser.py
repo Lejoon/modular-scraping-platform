@@ -9,8 +9,6 @@ import re
 from datetime import datetime
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
 
-from bs4 import BeautifulSoup
-
 from core.interfaces import Transform
 from core.models import ParsedItem, RawItem
 
@@ -18,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 # --------------------------------------------------------------------------- #
-# HTML parsing utilities
+# Utility functions for parsing AppMagic data
 # --------------------------------------------------------------------------- #
 def parse_appmagic_metric(metric_str: str) -> int:
     """Parse AppMagic metric strings like '1.2K', '3.5M', etc. into integers."""
@@ -124,9 +122,8 @@ class AppMagicParser(Transform):
 
     # ------------------------------------------------------------------- #
     def __init__(self):
-        # Store API and HTML data temporarily for merging
+        # Store API data temporarily for processing
         self._api_data_by_publisher: Dict[int, List[ParsedItem]] = {}
-        self._html_data_by_publisher: Dict[int, List[ParsedItem]] = {}
 
     # ------------------------------------------------------------------- #
     async def __call__(self, items: AsyncIterator[Any]) -> AsyncIterator[ParsedItem]:
@@ -163,7 +160,7 @@ class AppMagicParser(Transform):
             parsed_items = handler(payload)
             logger.debug(f"Handler for {item.source} produced {len(parsed_items)} parsed items")
             
-            # For API and HTML data, store for merging
+            # For API publisher apps data, store for processing
             if item.source == "appmagic.publisher_apps_api":
                 up_id = payload.get("united_publisher_id")
                 if up_id:
@@ -173,7 +170,6 @@ class AppMagicParser(Transform):
                     logger.debug(f"Stored {len(parsed_items)} API items for publisher {up_id}")
                 continue
 
-            
             # For other sources, yield immediately
             immediate_yield_count = 0
             for parsed in parsed_items:
@@ -181,108 +177,86 @@ class AppMagicParser(Transform):
                 immediate_yield_count += 1
             logger.debug(f"Immediately yielded {immediate_yield_count} items for {item.source}")
 
-        # Now merge API and HTML data
-        all_publishers = set(self._api_data_by_publisher.keys()) | set(self._html_data_by_publisher.keys())
-        logger.info(f"AppMagicParser: Merging data for {len(all_publishers)} publishers")
+        # Process stored API publisher data
+        total_processed_items = 0
+        for up_id in self._api_data_by_publisher.keys():
+            logger.debug(f"Processing API data for publisher {up_id}")
+            
+            # Process applications
+            async for app_item in self._process_applications(up_id):
+                yield app_item
+                total_processed_items += 1
+            
+            # Process metrics
+            async for metrics_item in self._process_metrics(up_id):
+                yield metrics_item
+                total_processed_items += 1
+            
+            # Process store applications
+            async for store_item in self._process_store_applications(up_id):
+                yield store_item
+                total_processed_items += 1
         
-        total_merged_items = 0
-        for up_id in all_publishers:
-            logger.debug(f"Merging data for publisher {up_id}")
-            publisher_items = 0
-            async for merged_item in self._merge_publisher_data(up_id):
-                yield merged_item
-                publisher_items += 1
-                total_merged_items += 1
-            logger.debug(f"Generated {publisher_items} merged items for publisher {up_id}")
-        
-        logger.info(f"AppMagicParser: Completed parsing - {total_merged_items} total merged items generated")
+        logger.info(f"AppMagicParser: Completed parsing - {total_processed_items} total items generated from API data")
 
     # ------------------------------------------------------------------- #
-    async def _merge_publisher_data(self, up_id: int) -> AsyncIterator[ParsedItem]:
-        """Merge API and HTML data for a single publisher."""
+    async def _process_applications(self, up_id: int) -> AsyncIterator[ParsedItem]:
+        """Process application data for a single publisher."""
         api_items = self._api_data_by_publisher.get(up_id, [])
         
-        logger.debug(f"Data for publisher {up_id}: {len(api_items)} API items")
-        
-        # Separate API items by type - API items from publisher_apps_api handler have these topics
+        # Get API applications
         api_apps = [item for item in api_items if item.topic == "appmagic.application" and item.content.get("data_source") == "api"]
-        api_metrics = [item for item in api_items if item.topic == "appmagic.application.metrics"]
-        api_store_apps = [item for item in api_items if item.topic == "appmagic.application.store"]
         
-        logger.info(f"Publisher {up_id}: {len(api_apps)} API apps, {len(api_metrics)} API metrics, {len(api_store_apps)} API store apps")
-    
-
-        # Index by united_application_id
-        api_apps_by_id = {item.content["united_application_id"]: item for item in api_apps}
-        api_metrics_by_id = {item.content["united_application_id"]: item for item in api_metrics}
+        logger.debug(f"Publisher {up_id}: Processing {len(api_apps)} API applications")
         
-        # Merge data
-        all_app_ids = set(api_apps_by_id.keys())
-        merged_count = 0
-        api_only_count = 0
-        html_only_count = 0
-
-        for ua_id in all_app_ids:
-            api_app = api_apps_by_id.get(ua_id)
-            api_metric = api_metrics_by_id.get(ua_id)
+        for api_app in api_apps:
+            # Create application data with API-only source
+            app_data = api_app.content.copy()
+            app_data["data_source"] = "api_only"
             
-            # Try name matching if no direct ID match
-            api_name = api_app.content.get("name")
-
-            # Determine data source
-            data_source = "api_only"
-            api_only_count += 1
-
-            # Create merged app data
-            merged_app_data = {}
-            
-            if api_app:
-                merged_app_data.update(api_app.content)
-            
-            merged_app_data["data_source"] = data_source
-            
-            # Emit merged UnitedApplications item
             yield ParsedItem(
                 topic="appmagic.application",
-                content=merged_app_data,
+                content=app_data,
             )
-            
-            # Emit API store applications for this app
-            for store_item in api_store_apps:
-                if store_item.content.get("united_application_id") == ua_id:
-                    yield store_item
-            
-            # Create merged metrics data - prioritize API data over HTML
-            merged_metrics_data = {
-                "scrape_date": datetime.utcnow().date().isoformat(),
-                "united_application_id": ua_id,
-            }
 
-            api_content = api_metric.content
-            merged_metrics_data.update({
-                "snapshot_30d_downloads": api_content.get("snapshot_30d_downloads"),
-                "snapshot_30d_revenue": api_content.get("snapshot_30d_revenue"),
-                # API lifetime metrics override HTML if available
-                "snapshot_lifetime_downloads": api_content.get("snapshot_lifetime_downloads") or merged_metrics_data.get("snapshot_lifetime_downloads"),
-                "snapshot_lifetime_revenue": api_content.get("snapshot_lifetime_revenue") or merged_metrics_data.get("snapshot_lifetime_revenue"),
-            })
-                
+    # ------------------------------------------------------------------- #
+    async def _process_metrics(self, up_id: int) -> AsyncIterator[ParsedItem]:
+        """Process metrics data for a single publisher."""
+        api_items = self._api_data_by_publisher.get(up_id, [])
+        
+        # Get API metrics
+        api_metrics = [item for item in api_items if item.topic == "appmagic.application.metrics"]
+        
+        logger.debug(f"Publisher {up_id}: Processing {len(api_metrics)} API metrics")
+        
+        for api_metric in api_metrics:
+            # Create metrics data from API
+            metrics_data = {
+                "scrape_date": datetime.utcnow().date().isoformat(),
+                "united_application_id": api_metric.content["united_application_id"],
+                "snapshot_30d_downloads": api_metric.content.get("snapshot_30d_downloads"),
+                "snapshot_30d_revenue": api_metric.content.get("snapshot_30d_revenue"),
+                "snapshot_lifetime_downloads": api_metric.content.get("snapshot_lifetime_downloads"),
+                "snapshot_lifetime_revenue": api_metric.content.get("snapshot_lifetime_revenue"),
+            }
+            
             yield ParsedItem(
                 topic="appmagic.application.metrics",
-                content=merged_metrics_data,
+                content=metrics_data,
             )
 
-        # Emit summary counts
-        yield ParsedItem(
-            topic="appmagic.publisher_apps_summary",
-            content={
-                "united_publisher_id": up_id,
-                "html_only_count": html_only_count,
-                "api_only_count": api_only_count,
-                "merged_count": merged_count,
-                "scrape_date": datetime.utcnow().date().isoformat(),
-            },
-        )
+    # ------------------------------------------------------------------- #
+    async def _process_store_applications(self, up_id: int) -> AsyncIterator[ParsedItem]:
+        """Process store application data for a single publisher."""
+        api_items = self._api_data_by_publisher.get(up_id, [])
+        
+        # Get API store applications
+        api_store_apps = [item for item in api_items if item.topic == "appmagic.application.store"]
+        
+        logger.debug(f"Publisher {up_id}: Processing {len(api_store_apps)} API store applications")
+        
+        for store_item in api_store_apps:
+            yield store_item
         
 
 # ----------------------------------------------------------------------- #
@@ -311,15 +285,12 @@ def _handler_groups(obj: Dict[str, Any]) -> List[ParsedItem]:
         logger.info(f"Created default group {group_id} for company '{company_name}' (ticker: {company_ticker})")
 
     for g in groups:
-        group_id = g["id"]
-        if group_id is None:
-            # Handle case where API has groups but with null IDs
-            company_name = company.get("name", "Unknown")
-            group_name = g.get("name", company_name)
-            group_hash_input = f"{group_name}_{company.get('ticker', '')}".lower()
-            group_id = hash(group_hash_input) % (2**31)
-            logger.warning(f"Group had null ID, generated {group_id} for group '{group_name}'")
-        
+        company_name = company.get("name", "Unknown")
+        group_name = g.get("name", company_name)
+        group_hash_input = f"{group_name}_{company.get('ticker', '')}".lower()
+        group_id = hash(group_hash_input) % (2**31)
+        logger.warning(f"Group had null ID, generated {group_id} for group '{group_name}'")
+    
         out.append(
             ParsedItem(
                 topic="appmagic.group",

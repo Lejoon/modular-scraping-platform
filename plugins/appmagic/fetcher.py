@@ -4,7 +4,6 @@
 ‣ identical REST calls and request-payloads to `scrape-company.py`  
 ‣ shape-guard for `"publishers" | "data" | "result"` wrappers  
 ‣ publisher-country snapshot endpoint  
-‣ HTML page download via `construct_html_url`  
 """
 
 from __future__ import annotations
@@ -19,7 +18,6 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Set
 from core.interfaces import Fetcher
 from core.models import RawItem
 from core.infra.http import HttpClient
-from core.infra.sel import PlaywrightClient
 
 logger = logging.getLogger(__name__)
 
@@ -60,9 +58,6 @@ class AppMagicFetcher(Fetcher):
         http: Optional[HttpClient] = None,
         include_apps: bool = True,
         include_country_split: bool = False,
-        use_html_fallback: bool = False,  # Changed from use_javascript_renderer - now disabled by default
-        playwright_timeout: int = 30_000,  # Still configurable for HTML fallback
-        wait_selector_timeout: int = 45_000,  # Still configurable for HTML fallback
     ) -> None:
         self._companies = companies
         self._rl = rate_limit_s
@@ -74,29 +69,15 @@ class AppMagicFetcher(Fetcher):
         )
         self._include_apps = include_apps
         self._include_country_split = include_country_split
-        self._use_html_fallback = use_html_fallback  # Updated variable name
-        self._playwright_timeout = playwright_timeout
-        self._wait_selector_timeout = wait_selector_timeout
-        self._playwright_client: Optional[PlaywrightClient] = None
  #------------------------------------------------------------------- #
     # Async context manager for proper resource cleanup
     # ------------------------------------------------------------------- #
     async def __aenter__(self):
         """Async context manager entry."""
-        if self._use_html_fallback:
-            self._playwright_client = PlaywrightClient(
-                headless=True,
-                stealth=True,
-                timeout=self._playwright_timeout  # Use configurable timeout
-            )
-            await self._playwright_client.start()
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(self, exc_type, exc_value, traceback):
         """Async context manager exit - ensure HttpClient and PlaywrightClient sessions are closed."""
-        if self._playwright_client:
-            await self._playwright_client.stop()
-            self._playwright_client = None
         if hasattr(self._http, 'close'):
             await self._http.close()
 
@@ -154,119 +135,6 @@ class AppMagicFetcher(Fetcher):
             else:
                 logger.warning("POST %s failed: %s", url, exc)
             return {}
-
-    async def _safe_get_text(self, url: str, **kw) -> str:
-        try:
-            return await self._http.get_text(url, **kw)
-        except AttributeError:  # legacy client exposes .get
-            return await self._http.get(url, **kw)
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("GET(text) %s failed: %s", url, exc)
-            return ""
-
-    async def _safe_get_html_with_js(self, url: str, wait_for_selector: Optional[str] = None) -> str:
-        """
-        Fetch HTML content with JavaScript rendering using Playwright.
-        
-        Args:
-            url: URL to fetch
-            wait_for_selector: Optional CSS selector to wait for before extracting content
-            
-        Returns:
-            Rendered HTML content or empty string on error
-        """
-        if not self._playwright_client:
-            logger.warning("Playwright client not available, falling back to simple HTTP")
-            return await self._safe_get_text(url)
-            
-        max_attempts = 3
-        attempt = 0
-        
-        while attempt < max_attempts:
-            attempt += 1
-            try:
-                logger.debug(f"Fetching JavaScript-rendered content from: {url} (attempt {attempt}/{max_attempts})")
-                
-                # Try with specific selector first, but if it fails, get content anyway
-                if wait_for_selector:
-                    try:
-                        # Use custom page creation for better control
-                        page = await self._playwright_client.new_page()
-                        try:
-                            await page.goto(url, wait_until="domcontentloaded", timeout=self._playwright_timeout)
-                            
-                            # Wait for selector with custom timeout and retries
-                            logger.debug(f"Waiting for selector: {wait_for_selector} (timeout: {self._wait_selector_timeout}ms)")
-                            
-                            # Try multiple fallback selectors if the primary one fails
-                            selectors_to_try = [
-                                wait_for_selector,
-                                "body",  # Fallback to body if specific selector fails
-                                "html"   # Ultimate fallback
-                            ]
-                            
-                            selector_found = False
-                            for selector in selectors_to_try:
-                                try:
-                                    await page.wait_for_selector(selector, timeout=self._wait_selector_timeout)
-                                    logger.debug(f"Successfully found selector: {selector}")
-                                    selector_found = True
-                                    break
-                                except Exception as sel_exc:
-                                    logger.debug(f"Selector '{selector}' failed: {sel_exc}")
-                                    continue
-                            
-                            if not selector_found:
-                                logger.warning(f"All selectors failed, but continuing to get content")
-                            
-                            # Additional wait for dynamic content to load
-                            await asyncio.sleep(2.0)  # Give SPA time to render
-                            
-                            html = await page.content()
-                            logger.debug(f"Successfully rendered HTML with JavaScript: {len(html)} characters")
-                            return html
-                            
-                        finally:
-                            await page.close()
-                            
-                    except Exception as selector_exc:
-                        logger.warning(f"JavaScript rendering with selector failed (attempt {attempt}): {selector_exc}")
-                        if attempt < max_attempts:
-                            wait_time = 5.0 * attempt  # Progressive delay: 5s, 10s, 15s
-                            logger.info(f"Retrying in {wait_time}s...")
-                            await asyncio.sleep(wait_time)
-                            continue
-                        # Fall through to try without selector on final attempt
-                
-                # Try without selector as fallback
-                try:
-                    page = await self._playwright_client.new_page()
-                    try:
-                        await page.goto(url, wait_until="domcontentloaded", timeout=self._playwright_timeout)
-                        await asyncio.sleep(3.0)  # Give more time for SPA to render
-                        html = await page.content()
-                        logger.debug(f"Successfully rendered HTML without selector: {len(html)} characters")
-                        return html
-                    finally:
-                        await page.close()
-                except Exception as no_selector_exc:
-                    logger.warning(f"JavaScript rendering without selector failed (attempt {attempt}): {no_selector_exc}")
-                    if attempt < max_attempts:
-                        wait_time = 10.0 * attempt  # Longer delay for complete failures
-                        logger.info(f"Retrying JavaScript rendering in {wait_time}s...")
-                        await asyncio.sleep(wait_time)
-                        continue
-                
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(f"JavaScript rendering attempt {attempt} failed for {url}: {exc}")
-                if attempt < max_attempts:
-                    wait_time = 15.0 * attempt  # Even longer delay for major failures
-                    logger.info(f"Retrying in {wait_time}s...")
-                    await asyncio.sleep(wait_time)
-                    continue
-        
-        logger.warning("All JavaScript rendering attempts failed for %s, falling back to simple HTTP", url)
-        return await self._safe_get_text(url)
 
     # ------------------------------------------------------------------- #
     async def fetch(self) -> AsyncIterator[RawItem]:
@@ -360,47 +228,6 @@ class AppMagicFetcher(Fetcher):
                         ).encode(),
                         fetched_at=fetched_at,
                     )
-
-            # HTML page fetching is now optional since metrics are available via the API
-            # HTML fetching can be enabled with use_html_fallback=True if needed for debugging
-            if self._use_html_fallback:
-                accounts_data = pub.get("accounts", []) or pub.get("publisherIds", [])
-                if accounts_data:
-                    # Only process the first account to avoid fetching duplicate data
-                    acc = accounts_data[0]
-                    s = acc.get("storeId") or acc.get("store") or store_id
-                    pid = acc.get("publisherId") or acc.get("store_publisher_id")
-                    if pid:
-                        logger.info(f"HTML fallback: Fetching HTML for publisher {pub_name}, store={s}, publisher_id={pid} (first account only)")
-                        if len(accounts_data) > 1:
-                            logger.debug(f"Skipping {len(accounts_data) - 1} additional accounts for publisher {pub_name} - data is redundant")
-                        url = construct_html_url(pub.get("name", ""), s, pid)
-                        logger.debug(f"HTML URL: {url}")
-                        
-                        # Use JavaScript renderer for SPA content
-                        wait_selector = "div.table.ng-star-inserted"
-                        html = await self._safe_get_html_with_js(url, wait_selector)
-                            
-                        logger.info(f"HTML fetch result: {len(html) if html else 0} characters")
-                        if html:
-                            yield RawItem(
-                                source="appmagic.publisher_html",
-                                payload=json.dumps(
-                                    {
-                                        "up_id": up_id,
-                                        "store": s,
-                                        "store_publisher_id": pid,
-                                        "html_url": url,
-                                        "html": html,
-                                        "total_accounts": len(accounts_data),  # Include count for reference
-                                    }
-                                ).encode(),
-                                fetched_at=fetched_at,
-                            )
-                    else:
-                        logger.debug(f"First account for publisher {pub_name} has no valid publisher_id, skipping HTML fetch")
-                else:
-                    logger.debug(f"No accounts found for publisher {pub_name}, skipping HTML fetch")
 
     # ------------------------------------------------------------------- #
     async def _fetch_publisher_apps(

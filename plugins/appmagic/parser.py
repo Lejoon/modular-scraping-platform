@@ -68,6 +68,54 @@ def extract_united_application_id_from_href(href: str) -> Optional[int]:
     return None
 
 
+def extract_store_app_id_from_url(url: str, store_id: Optional[int] = None) -> Optional[str]:
+    """
+    Extract store-specific app ID from store URLs.
+    
+    Args:
+        url: The store URL
+        store_id: The store ID (1=Google Play, 2=Apple App Store, etc.)
+    
+    Returns:
+        The extracted store app ID or None if extraction fails
+    """
+    if not url:
+        return None
+    
+    try:
+        # Google Play Store URLs
+        if "play.google.com" in url or store_id == 1:
+            # URL format: https://play.google.com/store/apps/details?id=com.package.name
+            if "id=" in url:
+                # Extract everything after 'id=' and before any '&'
+                id_part = url.split("id=")[1].split("&")[0]
+                return id_part
+        
+        # Apple App Store URLs
+        elif "apps.apple.com" in url or store_id == 2 or store_id == 3:
+            # URL formats: 
+            # https://apps.apple.com/us/app/app-name/id123456789
+            # https://apps.apple.com/gb/app/id372592824
+            # Look for /id followed by digits at the end of the path
+            match = re.search(r'/id(\d+)(?:/|$)', url)
+            if match:
+                return f"id{match.group(1)}"
+        
+        # For other stores or if extraction fails, try to get the last segment
+        # This is a fallback that might work for some store formats
+        path_segments = url.rstrip('/').split('/')
+        if path_segments:
+            last_segment = path_segments[-1]
+            # If it looks like an ID (contains digits or starts with known prefixes)
+            if last_segment and (last_segment.startswith('id') or any(c.isdigit() for c in last_segment)):
+                return last_segment
+    
+    except Exception as e:
+        logger.debug(f"Failed to extract store app ID from URL {url}: {e}")
+    
+    return None
+
+
 class AppMagicParser(Transform):
     # ------------------------------------------------------------------- #
     @property
@@ -113,7 +161,7 @@ class AppMagicParser(Transform):
             processed_items += 1
 
             parsed_items = handler(payload)
-            logger.debug(f"Handler for {item.source} produced {len(parsed_items)} parsed items")
+            logger.info(f"Handler for {item.source} produced {len(parsed_items)} parsed items")
             
             # For API and HTML data, store for merging
             if item.source == "appmagic.publisher_apps_api":
@@ -173,7 +221,7 @@ class AppMagicParser(Transform):
         html_apps = [item for item in html_items if item.topic == "appmagic.publisher_html"]
         non_app_html = [item for item in html_items if item.topic != "appmagic.publisher_html"]
         
-        logger.debug(f"Publisher {up_id}: {len(api_apps)} API apps, {len(api_metrics)} API metrics, {len(api_store_apps)} API store apps, {len(html_apps)} HTML apps")
+        logger.info(f"Publisher {up_id}: {len(api_apps)} API apps, {len(api_metrics)} API metrics, {len(api_store_apps)} API store apps, {len(html_apps)} HTML apps")
         
         # Yield non-app HTML items as-is
         for item in non_app_html:
@@ -494,16 +542,39 @@ def _handler_apps(obj: Dict[str, Any]) -> List[ParsedItem]:
             )
         )
 
+        # show apps a json response in logs
+        logger.info("Processing app: %s", json.dumps(a, indent=2))
+
         for sa in a.get("applications", []):
+            store_id_raw = sa.get("store")
+            
+            # Handle case where store_id comes as a list (e.g., [1]) instead of just 1
+            if isinstance(store_id_raw, list) and len(store_id_raw) > 0:
+                store_id = store_id_raw[0]
+            else:
+                store_id = store_id_raw
+                
+            store_url = sa.get("url")
+            
+            # Try multiple ways to get the store app ID
+            store_app_id = (
+                sa.get("store_app_id") or 
+                sa.get("bundleId") or
+                sa.get("storeAppId") or
+                extract_store_app_id_from_url(store_url, store_id)
+            )
+            
+            logger.info(f"Creating store record: store_id={store_id}, store_app_id={store_app_id}, url={store_url}")
+            
             out.append(
                 ParsedItem(
                     topic="appmagic.application.store",
                     content={
-                        "store_id": sa.get("store"),
-                        "store_app_id_text": sa.get("storeAppId") or sa.get("bundleId"),
+                        "store_id": store_id,
+                        "store_app_id_text": store_app_id,
                         "united_application_id": ua_id,
                         "name_on_store": sa.get("name"),
-                        "store_url": sa.get("url"),
+                        "store_url": store_url,
                         "first_seen_at": datetime.utcnow().isoformat(),
                     },
                 )
@@ -593,19 +664,7 @@ def _handler_publisher_apps_api(obj: Dict[str, Any]) -> List[ParsedItem]:
     logger.info(f"Processing publisher_apps_api for publisher {up_id}")
     applications = obj.get("applications", [])
     logger.info(f"Found {len(applications)} applications in API data")
-    
-    if len(applications) > 0:
-        # Log a sample of the first app to see structure
-        sample_app = applications[0]
-        logger.debug(f"Sample app structure: {list(sample_app.keys()) if isinstance(sample_app, dict) else type(sample_app)}")
-        if isinstance(sample_app, dict):
-            logger.debug(f"Sample app data: {dict(list(sample_app.items())[:5])}")  # First 5 fields
-            # Log metrics structure if available
-            if "metrics_30d" in sample_app:
-                logger.debug(f"Sample metrics_30d: {sample_app['metrics_30d']}")
-            if "metrics_lifetime" in sample_app:
-                logger.debug(f"Sample metrics_lifetime: {sample_app['metrics_lifetime']}")
-    
+        
     # Process applications from API search results
     for i, app in enumerate(applications):
         ua_id = app.get("id")  # API uses 'id', not 'united_application_id'
@@ -640,10 +699,7 @@ def _handler_publisher_apps_api(obj: Dict[str, Any]) -> List[ParsedItem]:
         # Extract worldwide metrics from the arrays using helper function
         downloads_30d, revenue_30d = extract_worldwide_metrics(metrics_30d)
         downloads_lifetime, revenue_lifetime = extract_worldwide_metrics(metrics_lifetime)
-        
-        if downloads_30d is not None or downloads_lifetime is not None:
-            logger.debug(f"Found WW metrics for app {ua_id}: 30d_downloads={downloads_30d}, 30d_revenue={revenue_30d}, lifetime_downloads={downloads_lifetime}, lifetime_revenue={revenue_lifetime}")
-        
+                
         # Also check direct fields on the app object as fallback
         if downloads_30d is None:
             downloads_30d = app.get("downloads")
@@ -651,7 +707,6 @@ def _handler_publisher_apps_api(obj: Dict[str, Any]) -> List[ParsedItem]:
             revenue_30d = app.get("revenue")
         
         if any([downloads_30d, revenue_30d, downloads_lifetime, revenue_lifetime]):
-            logger.debug(f"Creating metrics for app {ua_id}: 30d_downloads={downloads_30d}, 30d_revenue={revenue_30d}, lifetime_downloads={downloads_lifetime}, lifetime_revenue={revenue_lifetime}")
             out.append(
                 ParsedItem(
                     topic="appmagic.application.metrics",  # Changed to standard metrics topic
@@ -666,18 +721,27 @@ def _handler_publisher_apps_api(obj: Dict[str, Any]) -> List[ParsedItem]:
                 )
             )
             
-        # Create store records - check different possible field names
-        store_apps = app.get("applications", []) or app.get("store_applications", [])
-        for store_app in store_apps:
+        # Create store records from applicationIds array
+        application_ids = app.get("applications", [])
+        logger.info(f"App {ua_id} has {len(application_ids)} applicationIds entries")
+        
+        for app_id_entry in application_ids:
+            # The API returns "store" field, not "store_id" it is a list item so get first element
+            store_id = app_id_entry.get("store")[0]  
+            store_url = app_id_entry.get("url")
+            store_app_id = app_id_entry.get("store_application_id")
+            
+            logger.info(f"Creating store record: store_id={store_id}, store_app_id={store_app_id}, url={store_url}")
+            
             out.append(
                 ParsedItem(
                     topic="appmagic.application.store",
                     content={
-                        "store_id": store_app.get("store_id") or store_app.get("store"),
-                        "store_app_id_text": store_app.get("store_app_id") or store_app.get("bundleId") or store_app.get("storeAppId"),
+                        "store_id": store_id,
+                        "store_app_id_text": store_app_id,
                         "united_application_id": ua_id,
-                        "name_on_store": store_app.get("name"),
-                        "store_url": store_app.get("url"),
+                        "name_on_store": app_id_entry.get("name"),
+                        "store_url": store_url,
                         "first_seen_at": datetime.utcnow().isoformat(),
                     }
                 )
@@ -851,9 +915,7 @@ def _handler_publisher_html(obj: Dict[str, Any]) -> List[ParsedItem]:
     if not html_content:
         logger.warning(f"No HTML content provided for publisher {up_id}")
         return out
-    
-    logger.debug(f"Parsing HTML content for publisher {up_id}: {len(html_content)} characters")
-    
+        
     try:
         parsed_data = parse_publisher_page_html(html_content)
         apps_data = parsed_data["apps"]

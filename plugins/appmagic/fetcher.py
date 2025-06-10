@@ -421,19 +421,10 @@ class AppMagicFetcher(Fetcher):
             logger.debug(f"Fetching apps for publisher {up_id}, offset={from_offset}")
             
             payload = await self._safe_get_json(self._URL_PUBLISHER_APPS, params=params)
-            
-            # Handle different response structures
-            if isinstance(payload, list):
-                # If payload is directly a list of applications
-                hits = payload
-                applications = payload
-            elif isinstance(payload, dict):
-                # If payload is a dictionary with hits or applications key
-                hits = payload.get("hits", payload.get("applications", []))
-                applications = hits
-            else:
-                logger.warning(f"Unexpected payload type: {type(payload)}")
-                break
+
+            hits = payload
+            applications = payload
+            logger.info(f"Received {len(hits)} apps directly from API for publisher {up_id}")
             
             if not hits:
                 logger.debug(f"No more apps found for publisher {up_id}")

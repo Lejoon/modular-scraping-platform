@@ -160,6 +160,7 @@ class AppMagicFetcher(Fetcher):
             params = {"sort": "downloads", "united_publisher_id": up_id, "from": offset}
             apps = await self._json_request("GET", URL["publisher_apps"], params=params)
             if not apps:
+                logger.info("No more applications found for publisher %d at offset %d", up_id, offset)
                 break
 
             yield RawItem(

@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import Any, Dict, List
+import json
 
 from core.interfaces import Sink
 from core.models import ParsedItem
@@ -374,7 +375,6 @@ CREATE TABLE IF NOT EXISTS PublisherAppsSummary (
                 value = row[c]
                 # Convert lists to JSON strings for SQLite compatibility
                 if isinstance(value, list):
-                    import json
                     data[c] = json.dumps(value)
                 else:
                     data[c] = value

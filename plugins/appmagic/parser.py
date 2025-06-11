@@ -221,7 +221,8 @@ def _handle_publisher_apps_api(obj: Dict[str, Any]) -> List[ParsedItem]:
         )
 
         for sid in app.get("applications", []):
-            store_id = sid.get("store")[0]  # API returns list
+            store = sid.get("store")
+            store_id = store[0] if store and len(store) > 0 else None  # Ensure list is non-empty
             out.append(
                 ParsedItem(
                     topic=TOPIC.APPLICATION_STORE,

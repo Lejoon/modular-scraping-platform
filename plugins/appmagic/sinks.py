@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import Any, Dict, List
+import json
 
 from core.interfaces import Sink
 from core.models import ParsedItem
@@ -371,7 +372,12 @@ CREATE TABLE IF NOT EXISTS PublisherAppsSummary (
         data = {}
         for c in cols:
             if c in row:
-                data[c] = row[c]
+                value = row[c]
+                # Convert lists to JSON strings for SQLite compatibility
+                if isinstance(value, list):
+                    data[c] = json.dumps(value)
+                else:
+                    data[c] = value
         
         # Use the Database's upsert method which handles commits properly
         await self.db.upsert(table, data, pk)

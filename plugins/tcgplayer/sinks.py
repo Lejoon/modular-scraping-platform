@@ -102,6 +102,5 @@ class TcgDatabaseSink(Sink):
         # Use the database upsert method which handles commits
         try:
             await self.db.upsert(table_name, data, primary_key)
-            print(f"Upserted data to {table_name}: {data.get('set_name', data.get('sku_id', 'unknown'))}")
         except Exception as e:
             print(f"Error upserting to {table_name}: {e}")

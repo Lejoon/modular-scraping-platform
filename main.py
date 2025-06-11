@@ -33,7 +33,8 @@ async def main():
     
     # Check if scheduler mode is disabled
     scheduler_mode = os.getenv("SCHEDULER_MODE", "enabled")
-    discord_token = os.getenv("DISCORD_TOKEN")
+    discord_token = "[REDACTED_TOKEN]"
+    logger.info("Discord token: %s", "set" if discord_token else "not set")
     enable_discord = discord_token is not None
     
     if scheduler_mode == "disabled":

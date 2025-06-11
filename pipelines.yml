@@ -49,20 +49,6 @@ pipelines:
         kwargs:
           db_path: "tcg.db"
 
-  # TCGPlayer - Starwars sets CSV data pipeline
-  # Runs at 9 PM every day
-  tcgplayer_starwars_sets:
-    schedule:
-      cron: "0 20 * * *"  # Daily at 9 PM (21:00)
-    chain:
-      - class: tcgplayer.PokemonSetsCsvFetcher
-        kwargs:
-          csv_path: "plugins/tcgplayer/starwars_sets.csv"
-      - class: tcgplayer.PokemonSetsParser
-      - class: tcgplayer.TcgDatabaseSink
-        kwargs:
-          db_path: "tcg.db"
-
   # TCGPlayer - Price history data pipeline
   # Runs at 9 PM every day
   tcgplayer_price_history:
@@ -82,8 +68,7 @@ pipelines:
   # Runs every minute
   appmagic_companies:
     schedule:
-      interval:
-        minutes: 1
+      cron: "0 22 * * *"  # Daily at 9 PM (21:00)
     chain:
       - class: appmagic.AppMagicFetcher
         kwargs:

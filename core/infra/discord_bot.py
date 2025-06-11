@@ -182,4 +182,193 @@ def create_bot_commands(bot: ScraperBot):
             
         await interaction.response.send_message(f"📋 **Available Pipelines:**\n\n{content}")
 
+    @bot.tree.command(name="health", description="Show scheduler health status")
+    async def _health(interaction: discord.Interaction):
+        """Show scheduler health status."""
+        try:
+            health = bot.scheduler.get_health_status()
+            
+            # Build status message
+            status_emoji = "🟢" if health["scheduler_running"] else "🔴"
+            status_text = "Running" if health["scheduler_running"] else "Stopped"
+            
+            embed = discord.Embed(
+                title="📊 Scheduler Health Status",
+                color=discord.Color.green() if health["scheduler_running"] else discord.Color.red(),
+                timestamp=discord.utils.utcnow()
+            )
+            
+            embed.add_field(
+                name="Status",
+                value=f"{status_emoji} {status_text}",
+                inline=True
+            )
+            
+            embed.add_field(
+                name="Total Jobs",
+                value=str(health["total_jobs"]),
+                inline=True
+            )
+            
+            embed.add_field(
+                name="Active Jobs",
+                value=str(health["active_jobs"]),
+                inline=True
+            )
+            
+            if health["overdue_jobs"] > 0:
+                embed.add_field(
+                    name="⚠️ Overdue Jobs",
+                    value=f"{health['overdue_jobs']} jobs overdue",
+                    inline=False
+                )
+                
+                if len(health["overdue_job_ids"]) <= 5:
+                    embed.add_field(
+                        name="Overdue Job IDs",
+                        value="\n".join([f"• `{job_id}`" for job_id in health["overdue_job_ids"]]),
+                        inline=False
+                    )
+            
+            embed.add_field(
+                name="Timezone",
+                value=health["timezone"],
+                inline=True
+            )
+            
+            # Overall health indicator
+            if health["scheduler_running"] and health["overdue_jobs"] == 0:
+                embed.add_field(
+                    name="Overall Status",
+                    value="✅ Healthy",
+                    inline=False
+                )
+            elif health["overdue_jobs"] > 0:
+                embed.add_field(
+                    name="Overall Status", 
+                    value=f"⚠️ Warning: {health['overdue_jobs']} overdue jobs",
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name="Overall Status",
+                    value="❌ Issue: Scheduler not running",
+                    inline=False
+                )
+            
+            await interaction.response.send_message(embed=embed)
+            
+        except Exception as e:
+            logger.error(f"Failed to get health status: {e}")
+            await interaction.response.send_message(
+                f"❌ Failed to get health status: {str(e)}",
+                ephemeral=True
+            )
+
+    @bot.tree.command(name="next", description="Show jobs running in the next hour")
+    async def _next(interaction: discord.Interaction, hours: int = 1):
+        """Show jobs running in the next N hours."""
+        try:
+            from datetime import datetime, timezone, timedelta
+            
+            jobs = bot.scheduler.get_detailed_job_status()
+            now = datetime.now(timezone.utc)
+            cutoff = now + timedelta(hours=hours)
+            
+            upcoming = []
+            for job in jobs:
+                if job["next_run"] and job["status"] in ["scheduled", "imminent"]:
+                    next_run_dt = datetime.fromisoformat(job["next_run"].replace('Z', '+00:00'))
+                    if next_run_dt <= cutoff:
+                        upcoming.append((job, next_run_dt))
+            
+            upcoming.sort(key=lambda x: x[1])
+            
+            if not upcoming:
+                await interaction.response.send_message(
+                    f"📅 No jobs scheduled in the next {hours} hour(s)"
+                )
+                return
+            
+            lines = []
+            for job, next_run_dt in upcoming[:10]:  # Limit to 10 jobs
+                time_until = (next_run_dt - now).total_seconds()
+                
+                if time_until < 60:
+                    duration = f"{time_until:.0f}s"
+                elif time_until < 3600:
+                    duration = f"{time_until/60:.1f}m"
+                else:
+                    duration = f"{time_until/3600:.1f}h"
+                
+                status_emoji = "🟡" if job["status"] == "imminent" else "🟢"
+                lines.append(f"{status_emoji} **{job['id']}**")
+                lines.append(f"  └─ In {duration} ({next_run_dt.strftime('%H:%M:%S UTC')})")
+                lines.append("")
+            
+            content = "\n".join(lines)
+            if len(content) > 1800:
+                content = content[:1800] + "\n..."
+            
+            embed = discord.Embed(
+                title=f"⏰ Jobs Running in Next {hours} Hour(s)",
+                description=content,
+                color=discord.Color.blue(),
+                timestamp=discord.utils.utcnow()
+            )
+            
+            await interaction.response.send_message(embed=embed)
+            
+        except Exception as e:
+            logger.error(f"Failed to get upcoming jobs: {e}")
+            await interaction.response.send_message(
+                f"❌ Failed to get upcoming jobs: {str(e)}",
+                ephemeral=True
+            )
+
+    @bot.tree.command(name="overdue", description="Show overdue jobs")
+    async def _overdue(interaction: discord.Interaction):
+        """Show overdue jobs."""
+        try:
+            jobs = bot.scheduler.get_detailed_job_status()
+            overdue = [job for job in jobs if job["status"] == "overdue"]
+            
+            if not overdue:
+                await interaction.response.send_message("✅ No overdue jobs")
+                return
+            
+            lines = []
+            for job in overdue:
+                overdue_seconds = job.get("overdue_seconds", 0)
+                if overdue_seconds < 60:
+                    duration = f"{overdue_seconds:.0f}s"
+                elif overdue_seconds < 3600:
+                    duration = f"{overdue_seconds/60:.1f}m"
+                else:
+                    duration = f"{overdue_seconds/3600:.1f}h"
+                
+                lines.append(f"🔴 **{job['id']}**")
+                lines.append(f"  └─ Overdue by {duration}")
+                lines.append("")
+            
+            content = "\n".join(lines)
+            if len(content) > 1800:
+                content = content[:1800] + "\n..."
+            
+            embed = discord.Embed(
+                title="🚨 Overdue Jobs",
+                description=content,
+                color=discord.Color.red(),
+                timestamp=discord.utils.utcnow()
+            )
+            
+            await interaction.response.send_message(embed=embed)
+            
+        except Exception as e:
+            logger.error(f"Failed to get overdue jobs: {e}")
+            await interaction.response.send_message(
+                f"❌ Failed to get overdue jobs: {str(e)}",
+                ephemeral=True
+            )
+
     return bot

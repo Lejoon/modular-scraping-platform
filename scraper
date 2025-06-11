@@ -1,0 +1,13 @@
+#!/bin/bash
+# Quick scraper management commands
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+# Activate virtual environment if it exists
+if [ -d ".venv" ]; then
+    source .venv/bin/activate
+fi
+
+# Run the Python CLI
+python3 scraper_cli.py "$@"

@@ -4,7 +4,7 @@ Scheduler infrastructure for running periodic tasks.
 
 import asyncio
 import logging
-from typing import Callable, Dict, Any, Optional
+from typing import Callable, Dict, Any, Optional, List
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -228,3 +228,85 @@ class Scheduler:
                 "trigger": str(job.trigger),
             }
         return jobs
+
+    def get_health_status(self) -> Dict[str, Any]:
+        """Get comprehensive health status of the scheduler."""
+        from datetime import datetime, timezone
+        
+        jobs = self._scheduler.get_jobs()
+        now = datetime.now(timezone.utc)
+        
+        running_jobs = [job for job in jobs if hasattr(job, 'next_run_time') and job.next_run_time]
+        overdue_jobs = [
+            job for job in running_jobs 
+            if job.next_run_time and job.next_run_time < now
+        ]
+        
+        return {
+            "scheduler_running": self._started,
+            "total_jobs": len(jobs),
+            "active_jobs": len(running_jobs),
+            "overdue_jobs": len(overdue_jobs),
+            "overdue_job_ids": [job.id for job in overdue_jobs],
+            "timestamp": now.isoformat(),
+            "timezone": str(self._scheduler.timezone),
+        }
+
+    def get_detailed_job_status(self) -> List[Dict[str, Any]]:
+        """Get detailed status for all jobs."""
+        from datetime import datetime, timezone
+        
+        jobs = []
+        now = datetime.now(timezone.utc)
+        
+        for job in self._scheduler.get_jobs():
+            job_info = {
+                "id": job.id,
+                "name": job.name or job.id,
+                "next_run": job.next_run_time.isoformat() if job.next_run_time else None,
+                "trigger_type": type(job.trigger).__name__,
+                "trigger_details": str(job.trigger),
+                "max_instances": job.max_instances,
+                "coalesce": job.coalesce,
+                "misfire_grace_time": job.misfire_grace_time,
+            }
+            
+            # Add status information
+            if job.next_run_time:
+                time_diff = (job.next_run_time - now).total_seconds()
+                if time_diff < 0:
+                    job_info["status"] = "overdue"
+                    job_info["overdue_seconds"] = abs(time_diff)
+                elif time_diff < 300:  # Less than 5 minutes
+                    job_info["status"] = "imminent"
+                    job_info["next_run_seconds"] = time_diff
+                else:
+                    job_info["status"] = "scheduled"
+                    job_info["next_run_seconds"] = time_diff
+            else:
+                job_info["status"] = "inactive"
+            
+            jobs.append(job_info)
+        
+        # Sort by next run time
+        jobs.sort(key=lambda x: x["next_run"] or "9999-12-31T23:59:59")
+        return jobs
+
+    def get_job_execution_stats(self) -> Dict[str, Any]:
+        """Get execution statistics from the job store if available."""
+        try:
+            # This would require extending APScheduler or using job events
+            # For now, return basic info
+            jobs = self._scheduler.get_jobs()
+            return {
+                "total_jobs": len(jobs),
+                "job_types": {
+                    "cron": len([j for j in jobs if "CronTrigger" in str(type(j.trigger))]),
+                    "interval": len([j for j in jobs if "IntervalTrigger" in str(type(j.trigger))]),
+                    "other": len([j for j in jobs if "CronTrigger" not in str(type(j.trigger)) 
+                                 and "IntervalTrigger" not in str(type(j.trigger))]),
+                },
+            }
+        except Exception as e:
+            logger.error(f"Failed to get job execution stats: {e}")
+            return {"error": str(e)}

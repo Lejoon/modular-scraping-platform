@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 class Database:
     """Async SQLite database wrapper."""
     
-    def __init__(self, db_path: str = "scraper.db"):
+    def __init__(self, db_path: str = "db/scraper.db"):
         # Handle SQLite URL format if provided
         if db_path.startswith("sqlite"):
             # Handle sqlite+aiosqlite:///path format

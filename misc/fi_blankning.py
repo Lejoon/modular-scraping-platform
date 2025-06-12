@@ -280,7 +280,7 @@ async def _run_pipeline(
 # --------------------------------------------------------------------------- #
 
 async def run(
-    db_path: str = "scraper.db",
+    db_path: str = "db/scraper.db",
     external_session: aiohttp.ClientSession | None = None,
 ) -> None:
     """
@@ -310,7 +310,7 @@ if __name__ == "__main__":
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
     argp = argparse.ArgumentParser(description="Run FI short-selling scraper standalone")
-    argp.add_argument("--db", default="scraper.db", help="SQLite database file path")
+    argp.add_argument("--db", default="db/scraper.db", help="SQLite database file path")
     args = argp.parse_args()
 
     asyncio.run(run(args.db))

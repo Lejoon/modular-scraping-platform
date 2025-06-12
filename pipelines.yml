@@ -12,10 +12,10 @@ pipelines:
         kwargs: {}
       - class: fi_shortinterest.DiffParser
         kwargs:
-          db_path: "fi_shortinterest.db"
+          db_path: "db/fi_shortinterest.db"  # Updated path
       - class: fi_shortinterest.DatabaseSink
         kwargs:
-          db_path: "fi_shortinterest.db"
+          db_path: "db/fi_shortinterest.db"  # Updated path
 
   # FI Short Interest - Position data pipeline with diff detection
   # Runs every 10 minutes
@@ -30,10 +30,10 @@ pipelines:
         kwargs: {}
       - class: fi_shortinterest.DiffParser
         kwargs:
-          db_path: "fi_shortinterest.db"
+          db_path: "db/fi_shortinterest.db"  # Updated path
       - class: fi_shortinterest.DatabaseSink
         kwargs:
-          db_path: "fi_shortinterest.db"
+          db_path: "db/fi_shortinterest.db"  # Updated path
 
   # TCGPlayer - Pokemon sets CSV data pipeline
   # Runs at 9 PM every day
@@ -47,7 +47,7 @@ pipelines:
       - class: tcgplayer.PokemonSetsParser
       - class: tcgplayer.TcgDatabaseSink
         kwargs:
-          db_path: "tcg.db"
+          db_path: "db/tcg.db" # Updated path
 
   # TCGPlayer - Price history data pipeline
   # Runs at 9 PM every day
@@ -57,12 +57,12 @@ pipelines:
     chain:
       - class: tcgplayer.TcgPlayerPriceHistoryFetcher
         kwargs:
-          db_path: "tcg.db"
+          db_path: "db/tcg.db" # Updated path
           delay_seconds: 2.0
       - class: tcgplayer.PriceHistoryParser
       - class: tcgplayer.TcgDatabaseSink
         kwargs:
-          db_path: "tcg.db"
+          db_path: "db/tcg.db" # Updated path
 
   # AppMagic - Companies data pipeline
   # Runs every minute
@@ -110,4 +110,4 @@ pipelines:
         kwargs: {}
       - class: appmagic.AppMagicSink
         kwargs:
-          db_path: "mobile_analytics.db"
+          db_path: "db/mobile_analytics.db"  # Updated path

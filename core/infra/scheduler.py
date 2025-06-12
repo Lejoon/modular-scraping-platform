@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 class Scheduler:
     """Async task scheduler wrapper around APScheduler with persistence."""
     
-    def __init__(self, db_url: str = "sqlite:///scheduler_jobs.db", timezone: str = "UTC", enable_persistence: bool = True):
+    def __init__(self, db_url: str = "sqlite:///db/scheduler_jobs.db", timezone: str = "UTC", enable_persistence: bool = True):
         """Initialize scheduler with optional persistence and timezone."""
         
         if enable_persistence:

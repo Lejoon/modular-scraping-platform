@@ -27,7 +27,7 @@ class IntegrationBridge:
         channel_id: Optional[int] = None,
         error_channel_id: Optional[int] = None,
         tracked_companies: Optional[Set[str]] = None,
-        db_path: str = "scraper.db",
+        db_path: str = "db/scraper.db",
     ):
         self.discord_bot = discord_bot
         self.channel_id = channel_id
@@ -119,7 +119,7 @@ async def start_fi_monitoring(
     channel_id: int = 1175019650963222599,
     error_channel_id: int = 1162053416290361516,
     tracked_companies: Optional[Set[str]] = None,
-    db_path: str = "scraper.db",
+    db_path: str = "db/scraper.db",
 ) -> IntegrationBridge:
     """
     Start FI short interest monitoring with the new modular system.

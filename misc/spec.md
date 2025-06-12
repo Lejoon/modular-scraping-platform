@@ -173,10 +173,10 @@ pipelines:
         kwargs: {}
       - class: fi_shortinterest.DiffParser
         kwargs:
-          db_path: "fi_shortinterest.db"
+          db_path: "db/fi_shortinterest.db"
       - class: fi_shortinterest.DatabaseSink
         kwargs:
-          db_path: "fi_shortinterest.db"
+          db_path: "db/fi_shortinterest.db"
 ```
 
 A new source = one YAML stanza + dropping new plugin folder in `plugins/`. Zero code registration required.

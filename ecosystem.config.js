@@ -6,7 +6,7 @@ module.exports = {
     {
       name: "scraper",
       script: "main.py",
-      interpreter: "python3",
+      interpreter: "/root/projects/modular-scraping-platform/.venv/bin/python",
       cwd: cwd,
       env: {
         PYTHONPATH: cwd,

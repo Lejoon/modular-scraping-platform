@@ -5,10 +5,9 @@ Main entry point for the modular scraping platform with scheduling support.
 import asyncio
 import logging
 import os
-import signal
 import sys
+import signal
 from typing import Optional
-
 from dotenv import load_dotenv # Add this import
 
 # Add project root to PYTHONPATH so imports work when running this script directly
@@ -18,10 +17,6 @@ from core.pipeline_orchestrator import run_all_with_scheduler, run_all, load_pip
 from core.plugin_loader import refresh_registry, list_available
 from core.infra.scheduler import Scheduler
 from core.infra.discord_bot import ScraperBot, create_bot_commands
-
-# Make sure we run in the project root for relative paths (e.g. scraper.db)
-project_root = os.path.dirname(os.path.abspath(__file__))
-os.chdir(project_root)
 
 
 async def main():

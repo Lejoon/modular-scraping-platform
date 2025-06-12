@@ -9,6 +9,8 @@ import signal
 import sys
 from typing import Optional
 
+from dotenv import load_dotenv # Add this import
+
 # Add project root to PYTHONPATH so imports work when running this script directly
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -24,6 +26,9 @@ os.chdir(project_root)
 
 async def main():
     """Main entry point with scheduler and optional Discord bot support."""
+    # Load .env file
+    load_dotenv() # Add this line
+
     # Setup logging
     logging.basicConfig(
         level=logging.INFO,

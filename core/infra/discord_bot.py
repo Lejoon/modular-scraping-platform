@@ -1,297 +1,275 @@
 """
 Discord bot for managing scraper pipelines.
+Admin commands are visible **only** to server administrators.
+
+Visibility is handled via
+    @app_commands.default_permissions(administrator=True)
+Runtime execution is then further locked down to the configured
+ADMIN_USER_ID (or any user with the Administrator permission).
 """
 
+from __future__ import annotations
+
 import asyncio
-import logging
 import json
-from typing import Dict, Any, List, Optional
-from dotenv import load_dotenv
+import logging
 import os
+from typing import Any, Dict, List, Optional
+
 import discord
+from discord import app_commands
 from discord.ext import commands
-from discord import app_commands # Import app_commands
+from dotenv import load_dotenv
 
 from ..pipeline_orchestrator import (
-    run_pipeline,
     create_pipeline_runner,
     load_pipelines_config,
+    run_pipeline,
 )
 from .scheduler import Scheduler
 
 logger = logging.getLogger(__name__)
 
+# ──────────────────────────────────────────────────────────────────────────
+# Configuration
+# ──────────────────────────────────────────────────────────────────────────
 
-# Define your admin user ID and the guild ID where admin commands should be active
-# These should ideally be loaded from a configuration file or environment variables
-load_dotenv()  # Load environment variables from .env file if present
+load_dotenv()  # Load variables from a .env file if present
 
-ADMIN_USER_ID = os.getenv("ADMIN_USER_ID")
-ADMIN_GUILD_ID = v("ADMIN_GUILD_ID")
+# Convert to int if they exist, otherwise None
+ADMIN_USER_ID: Optional[int] = (
+    int(os.getenv("ADMIN_USER_ID")) if os.getenv("ADMIN_USER_ID") else None
+)
+ADMIN_GUILD_ID: Optional[int] = (
+    int(os.getenv("ADMIN_GUILD_ID")) if os.getenv("ADMIN_GUILD_ID") else None
+)
 
+# ──────────────────────────────────────────────────────────────────────────
+# Helpers
+# ──────────────────────────────────────────────────────────────────────────
 
 async def is_bot_admin(interaction: discord.Interaction) -> bool:
-    """Checks if the interacting user is the configured admin."""
-    # Ensure client has admin_user_id attribute
-    if not hasattr(interaction.client, 'admin_user_id') or interaction.client.admin_user_id is None:
+    """Return *True* if the caller is the configured admin or has Administrator."""
+
+    # Missing admin id on client ➔ refuse early (safety‑first)
+    if not hasattr(interaction.client, "admin_user_id"):
         logger.warning("Admin check failed: admin_user_id not configured on bot client.")
         return False
-    
-    is_admin = interaction.user.id == interaction.client.admin_user_id
-    if not is_admin:
-        await interaction.response.send_message(
-            "❌ You are not authorized to use this command.", ephemeral=True
-        )
-    return is_admin
 
+    user = interaction.user
+    is_admin_id = user.id == interaction.client.admin_user_id
+    is_admin_perm = getattr(user.guild_permissions, "administrator", False)
+
+    if is_admin_id or is_admin_perm:
+        return True
+
+    await interaction.response.send_message(
+        "❌ You are not authorized to use this command.", ephemeral=True
+    )
+    return False
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Bot implementation
+# ──────────────────────────────────────────────────────────────────────────
 
 class ScraperBot(commands.Bot):
     """Discord bot for managing scraper pipelines."""
-    
-    def __init__(self, scheduler: Scheduler, pipelines_cfg: List[Dict[str, Any]], 
-                 admin_user_id: Optional[int] = ADMIN_USER_ID, 
-                 admin_guild_id: Optional[int] = ADMIN_GUILD_ID, 
-                 **kwargs):
-        intents = discord.Intents.default()
-        # intents.message_content = True # Not strictly required for slash commands only bot
-        # intents.members = True # If you need to fetch member objects by ID not from interaction
-        
-        super().__init__(
-            command_prefix="!", # Not used for slash commands but good to have a placeholder
-            intents=intents,
-            **kwargs
-        )
-        
+
+    def __init__(
+        self,
+        scheduler: Scheduler,
+        pipelines_cfg: List[Dict[str, Any]],
+        *,
+        admin_user_id: Optional[int] = ADMIN_USER_ID,
+        admin_guild_id: Optional[int] = ADMIN_GUILD_ID,
+        **kwargs,
+    ):  # noqa: D401
+        intents = discord.Intents.default()  # Slash‑command‑only bot
+
+        super().__init__(command_prefix="!", intents=intents, **kwargs)
+
         self.scheduler = scheduler
         self.pipelines_cfg = {p["name"]: p for p in pipelines_cfg}
         self.admin_user_id = admin_user_id
         self.admin_guild_id = admin_guild_id
-        
-        self.admin_command_names = ["run", "schedule", "jobs", "remove"]
-        
+
+        # Convenience list for permission syncing (kept, but not strictly required)
+        self.admin_command_names: List[str] = ["run", "schedule", "jobs", "remove"]
+
+    # ────────────────────────────────────────
+    # Discord lifecycle hooks
+    # ────────────────────────────────────────
+
     async def setup_hook(self):
-        """Called when the bot is starting up."""
+        """Runs at startup before connecting to the gateway."""
+
         await self.scheduler.start()
-        logger.info(f"Bot setup complete. Available pipelines: {list(self.pipelines_cfg.keys())}")
-        
-        # Sync slash commands
+        logger.info("Bot setup complete. Available pipelines: %s", list(self.pipelines_cfg))
+
+        # ── Sync commands ───────────────────
         try:
+            # (1) If ADMIN_GUILD_ID is set, we register admin‑only commands
+            #     scoped to that guild so they appear instantly.
             if self.admin_guild_id:
-                # Sync admin commands to the specific admin guild
                 admin_guild_obj = discord.Object(id=self.admin_guild_id)
                 synced_admin = await self.tree.sync(guild=admin_guild_obj)
-                logger.info(f"Synced {len(synced_admin)} admin command(s) to guild {self.admin_guild_id}")
-                
-                # Sync public commands globally (or to other guilds if needed)
-                # For simplicity, this example syncs all commands. If you have truly global commands,
-                # you might need a more sophisticated sync strategy or sync all globally and let permissions handle it.
-                # For now, let's assume all commands are either admin (in admin_guild) or public (global).
-                # If all commands are guild-specific, this global sync might not be needed or desired.
-                # If you have other global commands, sync them separately without a guild argument.
-                # For this example, we assume all commands are defined and will be synced.
-                # If a command is not guild-specific in its decorator, it will be synced globally.
-                # If it is, it's already synced above.
-                
-                # Let's refine: sync only non-admin commands globally if they exist
-                # This part needs careful thought based on how commands are structured.
-                # For now, let's assume commands are either admin (guild-specific) or global.
-                # The current structure registers all commands and then syncs.
-                # If a command has a guild in its decorator, tree.sync() without guild won't sync it again.
-                # If a command does NOT have a guild in decorator, tree.sync(guild=...) won't sync it.
-                
-                # Simplest: Sync all. If a command has a guild in decorator, it goes there. Otherwise global.
-                synced_global = await self.tree.sync() # Syncs global commands
-                logger.info(f"Synced {len(synced_global)} global command(s)")
+                logger.info(
+                    "Synced %d admin command(s) to guild %s",
+                    len(synced_admin),
+                    self.admin_guild_id,
+                )
 
-            else:
-                # No admin guild specified, sync all commands globally
-                synced = await self.tree.sync()
-                logger.info(f"Synced {len(synced)} command(s) globally (admin guild not specified). Admin commands will rely on runtime checks only.")
+            # (2) Sync (or resync) global commands (e.g. /pipelines)
+            synced_global = await self.tree.sync()
+            logger.info("Synced %d global command(s)", len(synced_global))
 
-            # Set explicit permissions for admin commands if admin_guild_id and admin_user_id are set
-            if self.admin_guild_id and self.admin_user_id:
-                guild_obj = discord.Object(id=self.admin_guild_id)
-                admin_user_obj = discord.Object(id=self.admin_user_id) # For CommandPermission
-
-                # Fetch commands registered to the admin guild
-                # Note: get_commands() gets commands from the bot's internal tree,
-                # fetch_commands() gets them from Discord API after sync.
-                # We need commands from the tree that are meant for this guild.
-                
-                commands_in_guild = self.tree.get_commands(guild=guild_obj, type=discord.AppCommandType.chat_input)
-
-                for cmd in commands_in_guild:
-                    if cmd.name in self.admin_command_names:
-                        # This command is an admin command and registered to the admin guild
-                        permissions_to_set = {
-                            self.admin_user_id: app_commands.CommandPermission(admin_user_obj, type=discord.AppCommandPermissionType.user, permission=True)
-                        }
-                        try:
-                            await self.tree.edit_command_permissions(cmd, guild_obj, permissions_to_set)
-                            logger.info(f"Set explicit permissions for admin command '{cmd.name}' for user {self.admin_user_id} in guild {self.admin_guild_id}")
-                        except Exception as e_perm:
-                            logger.error(f"Failed to set permissions for admin command '{cmd.name}' in guild {self.admin_guild_id}: {e_perm}", exc_info=True)
-            elif self.admin_command_names and not self.admin_guild_id:
-                 logger.warning("Admin commands are defined, but no ADMIN_GUILD_ID is set. These commands will be global and rely solely on runtime checks.")
+        except Exception as exc:  # pragma: no cover — startup debug
+            logger.exception("Failed to sync commands: %s", exc)
 
 
-        except Exception as e:
-            logger.error(f"Failed to sync commands or set permissions: {e}", exc_info=True)
-
+# ──────────────────────────────────────────────────────────────────────────
+# Command registration helper
+# ──────────────────────────────────────────────────────────────────────────
 
 def create_bot_commands(bot: ScraperBot):
-    """Create and register Discord slash commands."""
+    """Create and register Discord application (slash) commands."""
 
-    admin_guild_object = discord.Object(id=bot.admin_guild_id) if bot.admin_guild_id else None
-    
-    # Define default permissions for admin commands: no one by default
-    # Server owners and users with Administrator permission might still see them.
-    # The explicit permission set in setup_hook for ADMIN_USER_ID is key.
-    admin_default_permissions = discord.Permissions.none()
+    # Register admin commands to a specific guild if supplied
+    admin_guild_obj = discord.Object(id=bot.admin_guild_id) if bot.admin_guild_id else None
 
+    # ——————————————————————————————————————————————
+    # ADMIN‑ONLY COMMANDS
+    # Visible: Administrators only (via @default_permissions)
+    # Executable: Only ADMIN_USER_ID or anyone with Administrator
+    # ——————————————————————————————————————————————
 
+    # /run
     @bot.tree.command(
-        name="run", 
+        name="run",
         description="Run a pipeline immediately",
-        guild=admin_guild_object, # Register to admin guild if specified
-        default_permissions=admin_default_permissions if admin_guild_object else None # Restrict by default if in admin guild
+        guild=admin_guild_obj,
     )
+    @app_commands.default_permissions(administrator=True)
     @app_commands.check(is_bot_admin)
     async def _run(interaction: discord.Interaction, name: str):
-        """Run a pipeline immediately."""
         if name not in bot.pipelines_cfg:
             available = ", ".join(bot.pipelines_cfg.keys())
             await interaction.response.send_message(
-                f"❌ Unknown pipeline '{name}'\nAvailable: {available}", 
-                ephemeral=True
+                f"❌ Unknown pipeline '{name}'\nAvailable: {available}",
+                ephemeral=True,
             )
             return
-            
+
         await interaction.response.defer(thinking=True)
-        
         try:
             await run_pipeline(bot.pipelines_cfg[name])
             await interaction.followup.send(f"✅ Pipeline **{name}** completed successfully")
-        except Exception as e:
-            logger.error(f"Pipeline {name} failed: {e}", exc_info=True)
-            await interaction.followup.send(f"❌ Pipeline **{name}** failed: {str(e)}")
+        except Exception as exc:
+            logger.exception("Pipeline %s failed: %s", name, exc)
+            await interaction.followup.send(f"❌ Pipeline **{name}** failed: {exc}")
 
+    # /schedule
     @bot.tree.command(
-        name="schedule", 
+        name="schedule",
         description="Add a cron job for a pipeline",
-        guild=admin_guild_object,
-        default_permissions=admin_default_permissions if admin_guild_object else None
+        guild=admin_guild_obj,
     )
+    @app_commands.default_permissions(administrator=True)
     @app_commands.check(is_bot_admin)
     async def _schedule(interaction: discord.Interaction, name: str, cron: str):
-        """Schedule a pipeline with a cron expression."""
         cfg = bot.pipelines_cfg.get(name)
         if not cfg:
             available = ", ".join(bot.pipelines_cfg.keys())
             await interaction.response.send_message(
-                f"❌ Unknown pipeline '{name}'\nAvailable: {available}", 
-                ephemeral=True
+                f"❌ Unknown pipeline '{name}'\nAvailable: {available}",
+                ephemeral=True,
             )
             return
-            
+
         try:
-            # Validate cron expression by creating the job
             runner = await create_pipeline_runner(cfg)
             job_id = f"pipeline_{name}_manual"
             bot.scheduler.add_cron_job(runner, cron_expression=cron, job_id=job_id)
-            
             await interaction.response.send_message(
                 f"📆 Scheduled **{name}** with cron `{cron}`\nJob ID: `{job_id}`"
             )
-        except Exception as e:
-            logger.error(f"Failed to schedule pipeline {name}: {e}")
+        except Exception as exc:
+            logger.exception("Failed to schedule pipeline %s: %s", name, exc)
             await interaction.response.send_message(
-                f"❌ Failed to schedule pipeline: {str(e)}", 
-                ephemeral=True
+                f"❌ Failed to schedule pipeline: {exc}", ephemeral=True
             )
 
+    # /jobs
     @bot.tree.command(
-        name="jobs", 
+        name="jobs",
         description="List all scheduled jobs",
-        guild=admin_guild_object,
-        default_permissions=admin_default_permissions if admin_guild_object else None
+        guild=admin_guild_obj,
     )
+    @app_commands.default_permissions(administrator=True)
     @app_commands.check(is_bot_admin)
     async def _jobs(interaction: discord.Interaction):
-        """List all scheduled jobs."""
         jobs = bot.scheduler.list_jobs()
-        
         if not jobs:
             await interaction.response.send_message("📋 No jobs scheduled")
             return
-            
-        # Format job information
-        lines = []
+
+        lines: List[str] = []
         for job_id, meta in jobs.items():
-            next_run = meta.get('next_run')
-            next_run_str = next_run.strftime('%Y-%m-%d %H:%M:%S UTC') if next_run else 'N/A'
-            trigger = meta.get('trigger', 'Unknown')
-            
+            next_run = meta.get("next_run")
+            next_run_str = next_run.strftime("%Y-%m-%d %H:%M:%S UTC") if next_run else "N/A"
+            trigger = meta.get("trigger", "Unknown")
+
             lines.append(f"**{job_id}**")
             lines.append(f"  └─ Next run: `{next_run_str}`")
             lines.append(f"  └─ Trigger: `{trigger}`")
             lines.append("")
-        
-        content = "\n".join(lines)
-        
-        # Split into chunks if too long for Discord
-        if len(content) > 2000:
-            content = content[:1997] + "..."
-            
+
+        content = "\n".join(lines)[:1997] + ("..." if len(lines) > 1997 else "")
         await interaction.response.send_message(f"📋 **Scheduled Jobs:**\n\n{content}")
 
+    # /remove
     @bot.tree.command(
-        name="remove", 
+        name="remove",
         description="Remove a scheduled job",
-        guild=admin_guild_object,
-        default_permissions=admin_default_permissions if admin_guild_object else None
+        guild=admin_guild_obj,
     )
+    @app_commands.default_permissions(administrator=True)
     @app_commands.check(is_bot_admin)
     async def _remove(interaction: discord.Interaction, job_id: str):
-        """Remove a scheduled job."""
         try:
             bot.scheduler.remove_job(job_id)
             await interaction.response.send_message(f"🗑️ Removed job: `{job_id}`")
-        except Exception as e:
-            logger.error(f"Failed to remove job {job_id}: {e}")
+        except Exception as exc:
+            logger.exception("Failed to remove job %s: %s", job_id, exc)
             await interaction.response.send_message(
-                f"❌ Failed to remove job: {str(e)}", 
-                ephemeral=True
+                f"❌ Failed to remove job: {exc}", ephemeral=True
             )
 
-    @bot.tree.command(name="pipelines", description="List available pipelines") # This remains a global/public command
+    # ——————————————————————————————————————————————
+    # PUBLIC COMMANDS (visible to everyone)
+    # ——————————————————————————————————————————————
+
+    @bot.tree.command(name="pipelines", description="List available pipelines")
     async def _pipelines(interaction: discord.Interaction):
-        """List all available pipelines."""
         if not bot.pipelines_cfg:
             await interaction.response.send_message("📋 No pipelines configured")
             return
-            
-        lines = []
+
+        lines: List[str] = []
         for name, cfg in bot.pipelines_cfg.items():
             chain_len = len(cfg.get("chain", []))
             schedule_info = ""
-            
             if "schedule" in cfg:
-                schedule_cfg = cfg["schedule"]
-                if "cron" in schedule_cfg:
-                    schedule_info = f" (cron: {schedule_cfg['cron']})"
-                elif "interval" in schedule_cfg:
-                    schedule_info = f" (interval: {schedule_cfg['interval']})"
-                    
+                sched_cfg = cfg["schedule"]
+                if "cron" in sched_cfg:
+                    schedule_info = f" (cron: {sched_cfg['cron']})"
+                elif "interval" in sched_cfg:
+                    schedule_info = f" (interval: {sched_cfg['interval']})"
             lines.append(f"**{name}**{schedule_info}")
-            lines.append(f"  └─ {chain_len} stages")
-            lines.append("")
-        
-        content = "\n".join(lines)
-        
-        if len(content) > 2000:
-            content = content[:1997] + "..."
-            
+            lines.append(f"  └─ {chain_len} stages\n")
+
+        content = "\n".join(lines)[:1997] + ("..." if len(lines) > 1997 else "")
         await interaction.response.send_message(f"📋 **Available Pipelines:**\n\n{content}")
 
     return bot

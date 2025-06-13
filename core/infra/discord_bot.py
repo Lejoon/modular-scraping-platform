@@ -21,11 +21,15 @@ from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
+
+
 from ..pipeline_orchestrator import (
     create_pipeline_runner,
     load_pipelines_config,
     run_pipeline,
 )
+
+from .db import Database
 from .scheduler import Scheduler
 
 logger = logging.getLogger(__name__)
@@ -106,6 +110,15 @@ class ScraperBot(commands.Bot):
 
         await self.scheduler.start()
         logger.info("Bot setup complete. Available pipelines: %s", list(self.pipelines_cfg))
+
+        fi_db_path = os.path.join(os.getcwd(), "db", "fi_shortinterest.db")
+        self.fi_short_db = Database(fi_db_path)
+        await self.fi_short_db.connect()
+        logger.info("Connected FI short‐interest DB: %s", fi_db_path)
+        
+        registered_commands = [c.name for c in self.tree.get_commands(type=discord.InteractionType.application_command)]
+        logger.info(f"Commands registered in tree before sync: {registered_commands}")
+
 
         # ── Sync commands ───────────────────
         try:
@@ -209,9 +222,10 @@ def create_bot_commands(bot: ScraperBot):
     @app_commands.default_permissions(administrator=True)
     @app_commands.check(is_bot_admin)
     async def _jobs(interaction: discord.Interaction):
+        await interaction.response.defer(thinking=True)  # ADDED
         jobs = bot.scheduler.list_jobs()
         if not jobs:
-            await interaction.response.send_message("📋 No jobs scheduled")
+            await interaction.followup.send("📋 No jobs scheduled") # CHANGED
             return
 
         lines: List[str] = []
@@ -225,8 +239,8 @@ def create_bot_commands(bot: ScraperBot):
             lines.append(f"  └─ Trigger: `{trigger}`")
             lines.append("")
 
-        content = "\n".join(lines)[:1997] + ("..." if len(lines) > 1997 else "")
-        await interaction.response.send_message(f"📋 **Scheduled Jobs:**\n\n{content}")
+        content = "\\n".join(lines)[:1997] + ("..." if len(lines) > 1997 else "")
+        await interaction.followup.send(f"📋 **Scheduled Jobs:**\\n\\n{content}") # CHANGED
 
     # /remove
     @bot.tree.command(
@@ -252,10 +266,11 @@ def create_bot_commands(bot: ScraperBot):
 
     @bot.tree.command(name="pipelines", description="List available pipelines")
     async def _pipelines(interaction: discord.Interaction):
+        await interaction.response.defer(thinking=True)  # ADDED
         if not bot.pipelines_cfg:
-            await interaction.response.send_message("📋 No pipelines configured")
+            await interaction.followup.send("📋 No pipelines configured") # CHANGED
             return
-
+        
         lines: List[str] = []
         for name, cfg in bot.pipelines_cfg.items():
             chain_len = len(cfg.get("chain", []))
@@ -269,7 +284,141 @@ def create_bot_commands(bot: ScraperBot):
             lines.append(f"**{name}**{schedule_info}")
             lines.append(f"  └─ {chain_len} stages\n")
 
-        content = "\n".join(lines)[:1997] + ("..." if len(lines) > 1997 else "")
-        await interaction.response.send_message(f"📋 **Available Pipelines:**\n\n{content}")
+        content = "\\n".join(lines)[:1997] + ("..." if len(lines) > 1997 else "")
+        await interaction.followup.send(f"📋 **Available Pipelines:**\\n\\n{content}") # CHANGED
+    
+    logger.info("Attempting to define /short command...")
+
+    async def company_autocomplete(
+        interaction: discord.Interaction,
+        current: str,
+    ) -> List[app_commands.Choice[str]]:
+        """Autocomplete for company names in the /short command."""
+        
+        # The 'bot' variable from the outer scope of create_bot_commands is the ScraperBot instance.
+        if not hasattr(bot, 'fi_short_db'):
+            logger.warning("fi_short_db attribute not found on bot for autocomplete.")
+            return []
+
+        db_conn = bot.fi_short_db
+        
+        try:
+            # Check if the connection object exists and if the internal aiosqlite connection is None
+            if db_conn._connection is None: 
+                await db_conn.connect() # This method should handle its own logging for success/failure
+        except Exception as e:
+            logger.error(f"Failed to connect/reconnect fi_short_db for autocomplete: {e}")
+            return []
+
+        choices = []
+        try:
+            query = """
+                SELECT DISTINCT company_name 
+                FROM short_positions_history 
+                WHERE LOWER(company_name) LIKE ? 
+                ORDER BY company_name 
+                LIMIT 5
+            """
+            rows = await db_conn.fetch_all(query, (f"{current.lower()}%",))
+            
+            if rows:
+                choices = [
+                    app_commands.Choice(name=str(row["company_name"]), value=str(row["company_name"]))
+                    for row in rows
+                ]
+
+        except Exception as e:
+            logger.error(f"Error during company autocomplete database query: {e}")
+            # For more detailed debugging, you might want to log the full traceback
+            # import traceback
+            # logger.error(traceback.format_exc())
+        
+        return choices
+
+    @bot.tree.command(name="short", description="Show short interest plot for a company (last 3 months)")
+    @app_commands.autocomplete(company=company_autocomplete)
+    async def _short(interaction: discord.Interaction, company: str):
+        import pandas as pd
+        import matplotlib.pyplot as plt
+        import matplotlib.dates as mdates
+        import matplotlib.ticker as mticker
+        from matplotlib import rcParams
+        import io
+
+        await interaction.response.defer(thinking=True)
+
+        db = bot.fi_short_db                   # use dedicated DB
+        # Find canonical company name
+        sql_name = """
+            SELECT company_name
+              FROM short_positions_history
+             WHERE LOWER(company_name) LIKE ?
+             LIMIT 1
+        """
+        row = await db.fetch_one(sql_name, (f"%{company.lower()}%",))
+        if not row:
+            return await interaction.followup.send(
+                f"Kan inte hitta någon blankning för {company}."
+            )
+        company_name = row["company_name"]
+
+        now = pd.Timestamp.now()
+        ago = now - pd.DateOffset(months=3)
+        sql_data = """
+            SELECT event_timestamp, position_percent
+              FROM short_positions_history
+             WHERE company_name = ?
+               AND event_timestamp BETWEEN ? AND ?
+             ORDER BY event_timestamp
+        """
+        rows = await db.fetch_all(
+            sql_data,
+            (
+                company_name,
+                ago.strftime("%Y-%m-%d %H:%M"),
+                now.strftime("%Y-%m-%d %H:%M"),
+            ),
+        )
+        if not rows:
+            return await interaction.followup.send(
+                f"Company: {company_name}, no data available."
+            )
+
+        df = pd.DataFrame([dict(r) for r in rows])
+        df["event_timestamp"] = pd.to_datetime(df["event_timestamp"])
+        df.set_index("event_timestamp", inplace=True)
+        daily = df.resample("D").last().ffill()
+        daily["position_percent"] /= 100
+
+        # Plot
+        plt.figure(figsize=(4, 2))
+        rcParams.update({"font.size": 7})
+        plt.rcParams["font.family"] = ["sans-serif"]
+        plt.rcParams["font.sans-serif"] = ["Arial", "Helvetica", "DejaVu Sans"]
+        plt.plot(daily.index, daily["position_percent"],
+                 marker="o", linestyle="-", color="#7289DA", markersize=3)
+        plt.title(f"{company_name}, Shorts % Last 3m".upper(),
+                  fontsize=6, weight="bold", loc="left")
+        plt.gca().yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1, decimals=1))
+        plt.gca().xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
+        plt.gca().xaxis.set_major_locator(mdates.MonthLocator())
+        plt.grid(True, which="both", linestyle="-", linewidth=0.5,
+                 color="gray", alpha=0.3)
+        for s in plt.gca().spines.values():
+            s.set_visible(False)
+        plt.tick_params(axis="x", labelsize=6)
+        plt.tick_params(axis="y", labelsize=6)
+        plt.tight_layout()
+
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png")
+        buf.seek(0)
+        plt.close()
+
+        latest = daily.iloc[-1, 0] * 100
+        await interaction.followup.send(
+            f"Company: {company_name}, {latest:.2f}% total shorted above with smallest individual position > 0.1%",
+            file=discord.File(buf, filename="plot.png"),
+        )
 
     return bot

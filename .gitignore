@@ -135,10 +135,6 @@ cython_debug/
 # VSCode
 .vscode/
 
-# Databases
-*.db
-*.sqlite3
-
 # Logs
 logs/
 *.log

@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core.pipeline_orchestrator import run_all_with_scheduler, run_all, load_pipelines_config
 from core.plugin_loader import refresh_registry, list_available
 from core.infra.scheduler import Scheduler
-from core.infra.discord_bot import ScraperBot, create_bot_commands
+from core.infra.discord_bot import ScraperBot, create_bot_commands, load_and_register_plugin_commands # Modified import
 
 
 async def main():
@@ -95,8 +95,12 @@ async def main():
         # Start Discord bot if enabled
         if enable_discord:
             logger.info("Starting Discord bot...")
+            # ADMIN_USER_ID and ADMIN_GUILD_ID are handled by ScraperBot's defaults using os.getenv
             bot = ScraperBot(scheduler=scheduler, pipelines_cfg=pipelines_cfg)
-            create_bot_commands(bot)
+            create_bot_commands(bot) # Register core/admin commands
+            
+            # Load and register plugin commands and run their setup hooks
+            await load_and_register_plugin_commands(bot, pipelines_cfg) # Added this line
             
             # Start bot in background
             bot_task = asyncio.create_task(bot.start(discord_token))

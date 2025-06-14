@@ -6,17 +6,18 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from typing import AsyncIterator, List, Any
+from discord.ext.commands import Bot  # Assuming discord.py Bot object
 
 from .models import RawItem, ParsedItem
 
 
 class Transform(ABC):
     """Universal transform interface for plugin pipeline stages.
-    
+
     This is the core abstraction that enables plugin chaining.
     Any stage in a pipeline implements this interface.
     """
-    
+
     @abstractmethod
     async def __call__(
         self, items: AsyncIterator[Any]
@@ -27,10 +28,10 @@ class Transform(ABC):
 
 class Fetcher(Transform):
     """Abstract base class for data fetchers.
-    
+
     Fetchers are specialized transforms that typically ignore input and yield RawItems.
     """
-    
+
     @property
     @abstractmethod
     def name(self) -> str:
@@ -53,10 +54,10 @@ class Fetcher(Transform):
 
 class Sink(Transform):
     """Abstract base class for data sinks.
-    
+
     Sinks are specialized transforms that consume items and yield them unchanged.
     """
-    
+
     @property
     @abstractmethod
     def name(self) -> str:
@@ -73,3 +74,26 @@ class Sink(Transform):
         async for item in items:
             await self.handle(item)
             yield item
+
+
+class DiscordCommands(ABC):
+    """Interface for plugin Discord command registration."""
+
+    @abstractmethod
+    def register(self, bot: Bot) -> None:
+        """Register all commands for this plugin on the given bot.
+
+        The bot instance can be used to access shared resources
+        like a database connection or an HTTP client if they are
+        attached to the bot object during its initialization.
+        """
+        pass
+
+    async def setup(self, bot: Bot) -> None:
+        """Optional asynchronous setup method for the plugin.
+
+        This method is called once when the plugin is loaded.
+        Plugins can use this to initialize resources like database connections
+        and attach them to the bot instance if needed.
+        """
+        pass

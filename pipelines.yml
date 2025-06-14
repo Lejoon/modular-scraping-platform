@@ -2,6 +2,7 @@ pipelines:
   # FI Short Interest - Aggregate data pipeline with diff detection
   # Runs every 10 minutes
   fi_shortinterest_agg:
+    discord_commands: "fi_shortinterest.FiShortInterestDiscordCommands" # Added
     schedule:
       interval:
         minutes: 10  # Every 10 minutes

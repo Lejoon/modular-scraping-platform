@@ -14,17 +14,18 @@ import asyncio
 import json
 import logging
 import os
-from typing import Any, Dict, List, Optional
-import requests # Added for market cap fetching
+import traceback # For detailed error logging
+from typing import Any, Dict, List, Optional, Type
 
 import discord
-from discord import app_commands
-from discord.ext import commands
-from dotenv import load_dotenv
-import importlib # Added for dynamic importing
-from core.interfaces import DiscordCommands # Added
-from core.plugin_loader import get_plugin_path # Assuming a helper like this
+from discord import app_commands, Interaction # Added Interaction
+from discord.ext import commands, tasks
+from discord.utils import get
 
+from dotenv import load_dotenv # Added import
+import importlib # Added import
+
+from ..interfaces import DiscordCommands
 from ..pipeline_orchestrator import (
     create_pipeline_runner,
     load_pipelines_config,
@@ -33,6 +34,7 @@ from ..pipeline_orchestrator import (
 
 from .db import Database
 from .scheduler import Scheduler
+from .http import HttpClient # Added import
 
 logger = logging.getLogger(__name__)
 
@@ -112,23 +114,18 @@ class ScraperBot(commands.Bot):
 
         await self.scheduler.start()
         logger.info("Bot setup complete. Available pipelines: %s", list(self.pipelines_cfg))
-
-        # fi_db_path = os.path.join(os.getcwd(), "db", "fi_shortinterest.db") # Removed
-        # self.fi_short_db = Database(fi_db_path) # Removed
-        # await self.fi_short_db.connect() # Removed
-        # logger.info("Connected FI short‐interest DB: %s", fi_db_path) # Removed
         
-        # Initialize an aiohttp.ClientSession for plugins that need HTTP requests
+        # Initialize an HttpClient for plugins that need HTTP requests
         # This should be done once for the bot instance.
-        if not hasattr(self, 'http_session'):
+        if not hasattr(self, 'http_client'): # Changed attribute name
             try:
-                import aiohttp
-                self.http_session = aiohttp.ClientSession()
-                logger.info("aiohttp.ClientSession initialized and attached to bot.")
-            except ImportError:
-                logger.error("aiohttp is not installed. HTTP-dependent plugin commands may fail. pip install aiohttp")
+                # You can configure HttpClient with defaults if needed, e.g.:
+                # default_headers = {"User-Agent": "MyScraperBot/1.0"}
+                # self.http_client = HttpClient(default_headers=default_headers)
+                self.http_client = HttpClient() # Using default HttpClient settings
+                logger.info("HttpClient initialized and attached to bot as http_client.")
             except Exception as e:
-                logger.error(f"Failed to initialize aiohttp.ClientSession: {e}", exc_info=True)
+                logger.error(f"Failed to initialize HttpClient: {e}", exc_info=True)
 
         registered_commands = [c.name for c in self.tree.get_commands(type=discord.InteractionType.application_command)]
         logger.info(f"Commands registered in tree before sync: {registered_commands}")
@@ -161,17 +158,17 @@ class ScraperBot(commands.Bot):
 
     async def close(self):
         """Properly close down the bot and its resources."""
-        if hasattr(self, 'http_session') and self.http_session:
-            await self.http_session.close()
-            logger.info("aiohttp.ClientSession closed.")
-        if hasattr(self, 'scheduler') and self.scheduler.running:
-            self.scheduler.shutdown()
-            logger.info("Scheduler shut down.")
-        # Close any other resources like database connections if they are managed by the bot directly
-        # For fi_short_db, it's now managed by the plugin's setup/teardown if it needs one.
-        # However, if fi_short_db was attached to the bot by the plugin, the plugin would be responsible for its teardown.
-        # A more robust system might involve plugins registering teardown hooks too.
-        await super().close()
+        if hasattr(self, 'http_client') and self.http_client:
+            await self.http_client.close()
+            logger.info("HttpClient closed.")
+        # The ScraperBot's scheduler attribute is the one passed from main.py,
+        # which has its lifecycle (start/stop) managed in main.py.
+        # ScraperBot itself doesn't control the scheduler's running state directly,
+        # so we should not try to shut it down here. main.py handles that.
+        # if hasattr(self, 'scheduler') and self.scheduler.running: # Incorrect check
+        #     self.scheduler.shutdown() # Incorrect: main.py owns scheduler lifecycle
+        #     logger.info("Scheduler shut down.")
+        await super().close() # Call discord.py's Bot.close()
         logger.info("Bot has been closed.")
 
 

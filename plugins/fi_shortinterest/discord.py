@@ -1,83 +1,89 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Optional, List # Added List
+from typing import TYPE_CHECKING, Optional, List
 
-import discord # Added
+import discord
 from discord import app_commands
 from discord.ext import commands
 
-# Plotting and data handling imports
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import matplotlib.ticker as mticker
 from matplotlib import rcParams
 import io
-import asyncio # Added for asyncio.to_thread if get_market_cap remains synchronous
+import asyncio
 
 from core.interfaces import DiscordCommands
-from core.infra.db import Database # Added for plugin-specific DB setup
-import os # Added for path joining
+from core.infra.db import Database
+from core.infra.http import HttpClient # Added HttpClient import
+import os
 
-# Avanza API Market Cap Fetching (Moved from core/infra/discord_bot.py)
-# You might want to move this to a shared utility or keep it here if specific
-# to fi_shortinterest plugin's Discord commands.
-# ──────────────────────────────────────────────────────────────────────────
+logger = logging.getLogger(__name__) # Moved logger to module level
 
+if TYPE_CHECKING:
+    from discord.ext.commands import Bot
+    # from core.infra.discord_bot import ScraperBot # If you have a custom bot class
+    # class ScraperBot(Bot):
+    #     fi_short_db: Database
+    #     http_client: HttpClient # Changed from http_session
+
+# Avanza API Market Cap Fetching
 AVANZA_SEARCH_URL = "https://www.avanza.se/_api/search/filtered-search"
 AVANZA_HEADERS = {
     "Content-Type": "application/json;charset=UTF-8",
-    "User-Agent": "Mozilla/5.0 (market-cap lookup script)",
+    "User-Agent": "Mozilla/5.0 (market-cap lookup script)", # Consider making this more generic or configurable
 }
 
-# Placeholder for a shared HTTP client, ideally passed via bot or context
-# For now, this will require refactoring to use an HTTP client instance
-async def _fetch_avanza_data(session, url: str, params: dict) -> dict:
-    async with session.get(url, params=params, headers=AVANZA_HEADERS) as response:
-        response.raise_for_status()
-        return await response.json()
+async def _fetch_avanza_data(http_client: HttpClient, url: str, params: dict) -> dict:
+    # HttpClient handles retries, status checks, and JSON parsing.
+    # Pass AVANZA_HEADERS per request as they are specific to this API.
+    try:
+        return await http_client.get_json(url, params=params, headers=AVANZA_HEADERS)
+    except Exception as e:
+        logger.error(f"Error fetching Avanza data from {url} with params {params}: {e}", exc_info=True)
+        raise # Re-raise to be handled by the caller, or return None/empty dict
 
-async def _get_orderbook_id(session, isin: str) -> Optional[str]:
+async def _get_orderbook_id(http_client: HttpClient, isin: str) -> Optional[str]:
     params = {"query": isin, "limit": 1, "marketPlace": "SE"}
     try:
-        data = await _fetch_avanza_data(session, AVANZA_SEARCH_URL, params)
-        if data["totalMatches"] > 0 and data["hits"]:
+        data = await _fetch_avanza_data(http_client, AVANZA_SEARCH_URL, params)
+        if data and data.get("totalMatches", 0) > 0 and data.get("hits"):
             for hit in data["hits"]:
-                if hit["instrumentType"] == "STOCK":
-                    return hit["id"]
+                if hit.get("instrumentType") == "STOCK":
+                    return hit.get("id")
     except Exception as e:
-        logger.error(f"Failed to get orderbook ID for ISIN {isin}: {e}")
+        # Error already logged in _fetch_avanza_data if it originated there
+        logger.error(f"Failed to get orderbook ID for ISIN {isin} after fetch attempt: {e}")
     return None
 
-async def get_market_cap(session, isin: str) -> Optional[int]:
-    orderbook_id = await _get_orderbook_id(session, isin)
+async def get_market_cap(http_client: HttpClient, isin: str) -> Optional[int]:
+    orderbook_id = await _get_orderbook_id(http_client, isin)
     if not orderbook_id:
         return None
     
     avanza_stock_url = f"https://www.avanza.se/_api/market-guide/stock/{orderbook_id}"
     try:
-        data = await _fetch_avanza_data(session, avanza_stock_url, params={})
-        return int(data["marketCapital"])
+        data = await _fetch_avanza_data(http_client, avanza_stock_url, params={})
+        if data and "marketCapital" in data:
+            return int(data["marketCapital"])
     except Exception as e:
-        logger.error(f"Failed to get market cap for ISIN {isin} (Orderbook ID: {orderbook_id}): {e}")
+        # Error already logged in _fetch_avanza_data if it originated there
+        logger.error(f"Failed to get market cap for ISIN {isin} (Orderbook ID: {orderbook_id}) after fetch attempt: {e}")
     return None
 
 
 class FiShortInterestDiscordCommands(DiscordCommands):
     def __init__(self):
-        pass # Constructor can be used for pre-computation if needed
+        pass
 
     async def setup(self, bot: Bot) -> None:
-        """Initialize and attach the fi_shortinterest database to the bot."""
-        if not hasattr(bot, 'fi_short_db'): # Check if already set up by another plugin or core
+        if not hasattr(bot, 'fi_short_db'):
             fi_db_path = os.path.join(os.getcwd(), "db", "fi_shortinterest.db")
             db_instance = Database(fi_db_path)
             try:
-                await db_instance.connect() # Ensure this is an async method
-                # Attach to bot instance, making it available to commands
-                # Ensure that the attribute name (e.g., fi_short_db) is consistent
-                # with how commands in this plugin expect to access it via the bot object.
+                await db_instance.connect()
                 setattr(bot, 'fi_short_db', db_instance) 
                 logger.info(f"Successfully connected and attached fi_shortinterest DB from plugin: {fi_db_path}")
             except Exception as e:
@@ -85,8 +91,8 @@ class FiShortInterestDiscordCommands(DiscordCommands):
         else:
             logger.info("fi_short_db already exists on bot instance. Skipping setup in fi_shortinterest plugin.")
 
-    def register(self, bot: Bot) -> None: # Use Bot type hint from TYPE_CHECKING
-        # Ensure bot has fi_short_db and http_session attributes
+    def register(self, bot: Bot) -> None:
+        # Ensure bot has fi_short_db and http_client attributes
         # These should be set up in your main bot class (ScraperBot)
 
         async def company_autocomplete(
@@ -209,23 +215,16 @@ class FiShortInterestDiscordCommands(DiscordCommands):
             )
 
         @bot.tree.command(name="hedgeshort", description="Show market-cap weighted aggregated short interest (last 3 months)")
-        @app_commands.default_permissions(administrator=True) # Assuming this was intended for hedgeshort
-        # @app_commands.check(is_bot_admin) # is_bot_admin would need to be passed or accessible
+        @app_commands.default_permissions(administrator=True)
         async def hedgeshort_command(interaction: discord.Interaction):
-            # Note: The is_bot_admin check would require access to that function.
-            # If it's a global check, it might be handled by the bot's core logic
-            # or you might need to pass/redefine a similar check mechanism here if it's plugin-specific.
-            # For now, I'm commenting it out as its definition is in the main bot file.
-            # If you want plugin-specific admin checks, that's a separate consideration.
-
             await interaction.response.defer(thinking=True)
 
-            if not hasattr(bot, 'fi_short_db') or not hasattr(bot, 'http_session'):
-                await interaction.followup.send("Database or HTTP session not available.")
+            if not hasattr(bot, 'fi_short_db') or not hasattr(bot, 'http_client'): # Changed to http_client
+                await interaction.followup.send("Database or HTTP client not available.") # Changed message
                 return
 
             db = bot.fi_short_db
-            http_session = bot.http_session # For get_market_cap
+            http_client_instance = bot.http_client # Changed from http_session
 
             now = pd.Timestamp.now()
             plot_ago = now - pd.DateOffset(months=3)
@@ -285,8 +284,7 @@ class FiShortInterestDiscordCommands(DiscordCommands):
             logger.info(f"Fetching market caps for {len(unique_isins)} unique ISINs for hedgeshort...")
             for isin_code in unique_isins:
                 if pd.isna(isin_code): continue
-                # Using the async get_market_cap directly as it's defined in this file
-                mcap = await get_market_cap(http_session, isin_code)
+                mcap = await get_market_cap(http_client_instance, isin_code) # Pass http_client_instance
                 if mcap is not None:
                     isin_market_caps[isin_code] = mcap
                 else:
@@ -413,3 +411,17 @@ class FiShortInterestDiscordCommands(DiscordCommands):
                 file=discord.File(buf, filename="hedgeshort_plot.png"),
             )
         logger.info("Registered Discord commands for fi_shortinterest plugin.")
+
+        @bot.tree.command(name="fi_marketcap", description="Get market capitalization for a Swedish ISIN.")
+        @app_commands.describe(isin="The ISIN code of the stock (e.g., SE0000115446)")
+        async def fi_marketcap(interaction: discord.Interaction, isin: str):
+            await interaction.response.defer(thinking=True)
+            if not hasattr(bot, 'http_client'): # Changed to http_client
+                await interaction.followup.send("Error: HTTP client not available on the bot.") # Changed message
+                return
+
+            market_cap = await get_market_cap(bot.http_client, isin) # Pass bot.http_client
+            if market_cap is not None:
+                await interaction.followup.send(f"Market capitalization of ISIN {isin}: {market_cap} SEK.")
+            else:
+                await interaction.followup.send(f"Could not retrieve market capitalization for ISIN {isin}.")

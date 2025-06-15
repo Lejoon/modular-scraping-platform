@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core.pipeline_orchestrator import run_all_with_scheduler, run_all, load_pipelines_config
 from core.plugin_loader import refresh_registry, list_available
 from core.infra.scheduler import Scheduler
-from core.infra.discord_bot import ScraperBot, create_bot_commands
+from core.infra.discord_bot import ScraperBot, create_bot_commands, load_and_register_plugin_commands # Modified import
 
 
 async def main():
@@ -78,7 +78,8 @@ async def main():
     
     # Setup graceful shutdown
     stop_event = asyncio.Event()
-    bot_task = None
+    bot_task: Optional[asyncio.Task] = None # Initialize to None
+    pipeline_task: Optional[asyncio.Task] = None # Initialize to None
     
     def signal_handler():
         logger.info("Received shutdown signal")
@@ -95,8 +96,12 @@ async def main():
         # Start Discord bot if enabled
         if enable_discord:
             logger.info("Starting Discord bot...")
+            # ADMIN_USER_ID and ADMIN_GUILD_ID are handled by ScraperBot's defaults using os.getenv
             bot = ScraperBot(scheduler=scheduler, pipelines_cfg=pipelines_cfg)
-            create_bot_commands(bot)
+            create_bot_commands(bot) # Register core/admin commands
+            
+            # Load and register plugin commands and run their setup hooks
+            await load_and_register_plugin_commands(bot, pipelines_cfg) # Added this line
             
             # Start bot in background
             bot_task = asyncio.create_task(bot.start(discord_token))
@@ -111,31 +116,40 @@ async def main():
         await stop_event.wait()
         
     except Exception as e:
-        logger.error(f"Error in main loop: {e}")
+        logger.error(f"Error in main loop: {e}", exc_info=True) # MODIFIED: Added exc_info=True for full traceback
     finally:
         # Cleanup
         logger.info("Shutting down...")
         
         # Cancel pipeline task
-        if 'pipeline_task' in locals() and not pipeline_task.done():
+        if pipeline_task and not pipeline_task.done(): # Check if not None
             logger.info("Cancelling pipelines...")
             pipeline_task.cancel()
             try:
                 await pipeline_task
             except asyncio.CancelledError:
+                logger.info("Pipeline task cancelled.")
                 pass
         
         # Stop Discord bot
-        if bot_task and not bot_task.done():
+        if bot_task and not bot_task.done(): # Check if not None
             logger.info("Stopping Discord bot...")
             bot_task.cancel()
             try:
                 await bot_task
             except asyncio.CancelledError:
+                logger.info("Discord bot task cancelled.")
                 pass
         
+        # Explicitly close bot resources if bot was initialized
+        if enable_discord and 'bot' in locals() and bot is not None:
+            logger.info("Closing Discord bot resources...")
+            await bot.close()
+        
         # Stop scheduler
-        await scheduler.stop()
+        if scheduler and scheduler._started: # MODIFIED: Check scheduler._started instead of scheduler.running
+            logger.info("Stopping scheduler...")
+            await scheduler.stop()
         
         logger.info("Shutdown complete")
 
@@ -143,6 +157,7 @@ async def main():
 async def run_without_scheduler():
     """Run pipelines once without scheduler (legacy behavior)."""
     logger = logging.getLogger(__name__)
+    pipeline_task: Optional[asyncio.Task] = None # Initialize to None
     
     # Discover and register all plugins
     logger.info("Discovering plugins...")
@@ -182,20 +197,26 @@ async def run_without_scheduler():
     
     # Wait for shutdown signal or pipeline completion
     try:
-        await asyncio.wait([
-            asyncio.create_task(stop_event.wait()),
-            pipeline_task
-        ], return_when=asyncio.FIRST_COMPLETED)
+        # Ensure pipeline_task is assigned before being used in asyncio.wait
+        if pipeline_task: # Check if pipeline_task was successfully created
+            await asyncio.wait([
+                asyncio.create_task(stop_event.wait()),
+                pipeline_task
+            ], return_when=asyncio.FIRST_COMPLETED)
+        else: # If pipeline_task is None (e.g. no pipelines configured)
+            await stop_event.wait()
+
     except Exception as e:
-        logger.error(f"Error in main loop: {e}")
+        logger.error(f"Error in main loop (run_without_scheduler): {e}", exc_info=True) # MODIFIED: Added exc_info=True
     finally:
         # Cancel any running tasks
-        if not pipeline_task.done():
+        if pipeline_task and not pipeline_task.done(): # Check if not None
             logger.info("Cancelling pipelines...")
             pipeline_task.cancel()
             try:
                 await pipeline_task
             except asyncio.CancelledError:
+                logger.info("Pipeline task cancelled in run_without_scheduler.")
                 pass
         
         logger.info("Shutdown complete")

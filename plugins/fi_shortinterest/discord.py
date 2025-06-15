@@ -411,17 +411,3 @@ class FiShortInterestDiscordCommands(DiscordCommands):
                 file=discord.File(buf, filename="hedgeshort_plot.png"),
             )
         logger.info("Registered Discord commands for fi_shortinterest plugin.")
-
-        @bot.tree.command(name="fi_marketcap", description="Get market capitalization for a Swedish ISIN.")
-        @app_commands.describe(isin="The ISIN code of the stock (e.g., SE0000115446)")
-        async def fi_marketcap(interaction: discord.Interaction, isin: str):
-            await interaction.response.defer(thinking=True)
-            if not hasattr(bot, 'http_client'): # Changed to http_client
-                await interaction.followup.send("Error: HTTP client not available on the bot.") # Changed message
-                return
-
-            market_cap = await get_market_cap(bot.http_client, isin) # Pass bot.http_client
-            if market_cap is not None:
-                await interaction.followup.send(f"Market capitalization of ISIN {isin}: {market_cap} SEK.")
-            else:
-                await interaction.followup.send(f"Could not retrieve market capitalization for ISIN {isin}.")

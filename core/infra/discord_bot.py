@@ -16,6 +16,7 @@ import logging
 import os
 import traceback # For detailed error logging
 from typing import Any, Dict, List, Optional, Type
+import inspect 
 
 import discord
 from discord import app_commands, Interaction # Added Interaction
@@ -320,7 +321,7 @@ def create_bot_commands(bot: ScraperBot):
     
     return bot
 
-def load_and_register_plugin_commands(bot: commands.Bot, pipelines_config: List[Dict[str, Any]]):
+async def load_and_register_plugin_commands(bot: commands.Bot, pipelines_config: List[Dict[str, Any]]):
     """
     Loads Discord command classes specified in pipelines.yml and registers them.
     """
@@ -345,9 +346,22 @@ def load_and_register_plugin_commands(bot: commands.Bot, pipelines_config: List[
                 
                 if issubclass(command_class, DiscordCommands):
                     instance = command_class()
+
+                    # ── optional async setup hook ─────────────────────────────
+                    if hasattr(instance, "setup"):
+                        setup_fn = instance.setup
+                        if inspect.iscoroutinefunction(setup_fn):
+                            await setup_fn(bot)
+                        else:
+                            setup_fn(bot)
+
+                    # ── register slash-commands ───────────────────────────────
                     instance.register(bot)
                     registered_commands_classes.add(discord_command_path)
-                    logger.info(f"Successfully registered Discord commands from {discord_command_path}")
+                    logger.info(
+                        "Successfully registered Discord commands from %s",
+                        discord_command_path,
+                    )
                 else:
                     logger.warning(f"Class {discord_command_path} does not implement DiscordCommands interface.")
             except ImportError as e:
